@@ -1,3 +1,4 @@
 out/
+dist/
 *.vsix
 node_modules/
