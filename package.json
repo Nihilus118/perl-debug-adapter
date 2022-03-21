@@ -23,10 +23,10 @@
   "private": true,
   "repository": {
     "type": "git",
-    "url": ""
+    "url": "https://github.com/Nihilus118/vscode-perl-debug"
   },
   "bugs": {
-    "url": ""
+    "url": "https://github.com/Nihilus118/vscode-perl-debug"
   },
   "scripts": {
     "compile": "tsc -p ./",
