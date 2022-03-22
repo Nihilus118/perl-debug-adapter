@@ -2,6 +2,7 @@
  * Copyright (C) Microsoft Corporation. All rights reserved.
  *--------------------------------------------------------*/
 
+import { ChildProcess, spawn, SpawnOptions } from 'child_process';
 import { EventEmitter } from 'events';
 
 export interface FileAccessor {
@@ -102,7 +103,10 @@ export function timeout(ms: number) {
  * When implementing your own debugger extension for VS Code, you probably don't need this
  * class because you can rely on some existing debugger or runtime.
  */
-export class PerlRuntime extends EventEmitter {
+export class PerlRuntimeWrapper extends EventEmitter {
+
+	// the perl cli session
+	private _session!: ChildProcess;
 
 	// the initial (and one and only) file we are 'debugging'
 	private _sourceFile: string = '';
@@ -157,7 +161,44 @@ export class PerlRuntime extends EventEmitter {
 	 */
 	public async start(program: string, stopOnEntry: boolean, debug: boolean): Promise<void> {
 
-		await this.loadSource(this.normalizePathAndCasing(program));
+		// Spawn perl process and handle errors
+		const spawnOptions: SpawnOptions = {
+			detached: true,
+			cwd: undefined,
+			env: {
+				COLUMNS: '80',
+				LINES: '25',
+				TERM: 'dumb',
+				...process.env,
+			},
+		};
+
+		const commandArgs = [
+			...([] || []),
+			'-d:Trepan',
+			// TODO: Get script from launch.json
+			program,
+			...([] || [])
+		];
+
+		this._session = spawn(
+			'perl',
+			commandArgs,
+			spawnOptions
+		);
+
+		this._session.on('error', (data) => {
+			console.error(data.toString());
+			// stop launch request with error response
+			return;
+		});
+
+		if (stopOnEntry === true) {
+			this.sendEvent('stopOnEntry');
+		} else {
+			// run until first breakpoint
+			this.sendEvent('stopOnEntry');
+		}
 
 		if (debug) {
 			await this.verifyBreakpoints(this._sourceFile);

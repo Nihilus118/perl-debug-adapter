@@ -7,7 +7,7 @@ import {
 } from '@vscode/debugadapter';
 import { DebugProtocol } from '@vscode/debugprotocol';
 import { basename } from 'path-browserify';
-import { PerlRuntime, IRuntimeBreakpoint, FileAccessor, RuntimeVariable, timeout, IRuntimeVariableType } from './perlRuntime';
+import { PerlRuntimeWrapper, IRuntimeBreakpoint, FileAccessor, RuntimeVariable, timeout, IRuntimeVariableType } from './PerlRuntimeWrapper';
 import { Subject } from 'await-notify';
 import * as base64 from 'base64-js';
 
@@ -37,7 +37,7 @@ export class PerlDebugSession extends LoggingDebugSession {
 	private static threadID = 1;
 
 	// a Mock runtime (or debugger)
-	private _runtime: PerlRuntime;
+	private _runtime: PerlRuntimeWrapper;
 
 	private _variableHandles = new Handles<'locals' | 'globals' | RuntimeVariable>();
 
@@ -66,7 +66,7 @@ export class PerlDebugSession extends LoggingDebugSession {
 		this.setDebuggerLinesStartAt1(false);
 		this.setDebuggerColumnsStartAt1(false);
 
-		this._runtime = new PerlRuntime(fileAccessor);
+		this._runtime = new PerlRuntimeWrapper(fileAccessor);
 
 		// setup event handlers
 		this._runtime.on('stopOnEntry', () => {

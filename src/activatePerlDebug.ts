@@ -4,7 +4,7 @@
 import * as vscode from 'vscode';
 import { WorkspaceFolder, DebugConfiguration, ProviderResult, CancellationToken } from 'vscode';
 import { PerlDebugSession } from './perlDebug';
-import { FileAccessor } from './perlRuntime';
+import { FileAccessor } from './PerlRuntimeWrapper';
 
 export function activatePerlDebug(context: vscode.ExtensionContext, factory?: vscode.DebugAdapterDescriptorFactory) {
 

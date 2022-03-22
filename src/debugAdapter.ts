@@ -2,7 +2,7 @@ import { PerlDebugSession } from './perlDebug';
 
 import { promises as fs } from 'fs';
 import * as Net from 'net';
-import { FileAccessor } from './perlRuntime';
+import { FileAccessor } from './PerlRuntimeWrapper';
 
 const fsAccessor: FileAccessor = {
 	readFile(path: string): Promise<Uint8Array> {
