@@ -1,17 +1,6 @@
 import { PerlDebugSession } from './perlDebug';
 
-import { promises as fs } from 'fs';
 import * as Net from 'net';
-import { FileAccessor } from './PerlRuntimeWrapper';
-
-const fsAccessor: FileAccessor = {
-	readFile(path: string): Promise<Uint8Array> {
-		return fs.readFile(path);
-	},
-	writeFile(path: string, contents: Uint8Array): Promise<void> {
-		return fs.writeFile(path, contents);
-	}
-};
 
 let port = 0;
 const args = process.argv.slice(2);
@@ -30,14 +19,14 @@ if (port > 0) {
 		socket.on('end', () => {
 			console.error('>> client connection closed\n');
 		});
-		const session = new PerlDebugSession(fsAccessor);
+		const session = new PerlDebugSession();
 		session.setRunAsServer(true);
 		session.start(socket, socket);
 	}).listen(port);
 } else {
 
 	// start a single session that communicates via stdin/stdout
-	const session = new PerlDebugSession(fsAccessor);
+	const session = new PerlDebugSession();
 	process.on('SIGTERM', () => {
 		session.shutdown();
 	});

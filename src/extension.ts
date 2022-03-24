@@ -15,15 +15,15 @@
 
 'use strict';
 
-import * as Net from 'net';
-import * as vscode from 'vscode';
 import { randomBytes } from 'crypto';
+import * as Net from 'net';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { platform } from 'process';
+import * as vscode from 'vscode';
 import { ProviderResult } from 'vscode';
+import { activatePerlDebug } from './activatePerlDebug';
 import { PerlDebugSession } from './perlDebug';
-import { activatePerlDebug, workspaceFileAccessor } from './activatePerlDebug';
 
 /*
  * The compile time flag 'runMode' controls how the debug adapter is run.
@@ -97,7 +97,7 @@ class MockDebugAdapterServerDescriptorFactory implements vscode.DebugAdapterDesc
 		if (!this.server) {
 			// start listening on a random port
 			this.server = Net.createServer(socket => {
-				const session = new PerlDebugSession(workspaceFileAccessor);
+				const session = new PerlDebugSession();
 				session.setRunAsServer(true);
 				session.start(socket as NodeJS.ReadableStream, socket);
 			}).listen(0);
@@ -126,7 +126,7 @@ class MockDebugAdapterNamedPipeServerDescriptorFactory implements vscode.DebugAd
 			const pipePath = platform === "win32" ? join('\\\\.\\pipe\\', pipeName) : join(tmpdir(), pipeName);
 
 			this.server = Net.createServer(socket => {
-				const session = new PerlDebugSession(workspaceFileAccessor);
+				const session = new PerlDebugSession();
 				session.setRunAsServer(true);
 				session.start(<NodeJS.ReadableStream>socket, socket);
 			}).listen(pipePath);
