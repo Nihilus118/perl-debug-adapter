@@ -42,14 +42,12 @@
     "@types/vscode": "^1.64.0",
     "@typescript-eslint/eslint-plugin": "^5.12.0",
     "@typescript-eslint/parser": "^5.12.0",
+    "@vscode/debugadapter": "^1.55.0-pre.1",
+    "@vscode/debugadapter-testsupport": "^1.55.0-pre.1",
     "esbuild": "^0.14.21",
     "eslint": "^8.9.0",
     "typescript": "^4.5.5",
     "vsce": "^2.6.7"
-  },
-  "dependencies": {
-    "@vscode/debugadapter": "^1.55.1",
-    "vscode": "^1.1.37"
   },
   "main": "./dist/extension.js",
   "browser": "./dist/web-extension.js",
@@ -89,6 +87,11 @@
               "stopOnEntry": {
                 "type": "boolean",
                 "description": "Automatically stop after launch.",
+                "default": true
+              },
+              "debug": {
+                "type": "boolean",
+                "description": "Enable or disable debugging.",
                 "default": true
               },
               "trace": {
