@@ -6,21 +6,6 @@ import { ChildProcess, spawn, SpawnOptions } from 'child_process';
 import { EventEmitter } from 'events';
 import { StreamCatcher } from './streamCatcher';
 
-export interface RequestResponse {
-	data?: string[],
-	// orgData: string[],
-	// ln: number,
-	// errors: ResponseError[],
-	// name: string,
-	// filename: string,
-	// exception: boolean,
-	// finished: boolean,
-	// command?: string,
-	// db?: string,
-	// changes: WatchpointChange[];
-	// special: string[];
-}
-
 export interface IRuntimeBreakpoint {
 	id: number;
 	line: number;
@@ -83,6 +68,7 @@ export class PerlRuntimeWrapper extends EventEmitter {
 	private _session!: ChildProcess;
 	// helper to run commands and parse output
 	private streamCatcher: StreamCatcher;
+	private lastArgs: [string, boolean, boolean] | undefined;
 
 	// maps from sourceFile to array of IRuntimeBreakpoint
 	private _breakPoints = new Map<string, IRuntimeBreakpoint[]>();
@@ -106,6 +92,8 @@ export class PerlRuntimeWrapper extends EventEmitter {
 
 	// Start executing the given program.
 	public async start(program: string, stopOnEntry: boolean, debug: boolean): Promise<void> {
+		this.lastArgs = [program, stopOnEntry, debug];
+
 		// Spawn perl process and handle errors
 		const spawnOptions: SpawnOptions = {
 			detached: true,
@@ -133,14 +121,16 @@ export class PerlRuntimeWrapper extends EventEmitter {
 			this._session.stderr!
 		);
 
-		this.request("h\n");
+		this._session.stdout!.on('data', (data) => {
+			this.emit('output', data.toString());
+		});
 
-		if (stopOnEntry) {
-			// stop after first step
-			this.step();
+		await this.request("h\n");
+
+		if (stopOnEntry && debug) {
+			await this.step();
 		} else {
-			// run until first breakpoint
-			this.continue();
+			await this.continue();
 		}
 	}
 
@@ -149,8 +139,18 @@ export class PerlRuntimeWrapper extends EventEmitter {
 	}
 
 	public async continue() {
-		await this.request('c\n');
+		const lines = await this.request('c\n');
+		const end = lines.join().includes('Debugged program terminated.');
+		if (end) {
+			this.emit('end');
+		}
 		this.emit('stopOnBreakpoint');
+	}
+
+	public async getBreakpoints() {
+		const lines = await this.request("L");
+		// TODO: Parse breakpoints
+		return lines;
 	}
 
 	public async step() {
@@ -168,9 +168,24 @@ export class PerlRuntimeWrapper extends EventEmitter {
 		this.emit('stopOnStep');
 	}
 
+	public async restart() {
+		await this.request('q\n');
+		await this.start(...this.lastArgs!);
+	}
+
 	public async terminate() {
 		await this.request('q\n');
 		this.emit('end');
+	}
+
+	public async clearAllDataBreakpoints() {
+		await this.request("B *\n");
+	}
+
+	public async setDataBreakpoint(): Promise<boolean> {
+		await this.request(`b *\n`);
+		// TODO: Validate Breakpoint
+		return true;
 	}
 
 	/**

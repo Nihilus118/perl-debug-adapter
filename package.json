@@ -44,6 +44,7 @@
     "@typescript-eslint/parser": "^5.12.0",
     "@vscode/debugadapter": "^1.55.0-pre.1",
     "@vscode/debugadapter-testsupport": "^1.55.0-pre.1",
+    "await-notify": "^1.0.1",
     "esbuild": "^0.14.21",
     "eslint": "^8.9.0",
     "typescript": "^4.5.5",

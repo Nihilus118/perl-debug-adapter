@@ -9,7 +9,8 @@
 			"request": "launch",
 			"name": "Perl Debug",
 			"program": "${workspaceFolder}/test.pl",
-			"stopOnEntry": true
+			"stopOnEntry": true,
+			"debug": true
 		}
 	]
 }
