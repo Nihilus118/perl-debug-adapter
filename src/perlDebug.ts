@@ -1,27 +1,24 @@
 import {
+	Breakpoint,
 	BreakpointEvent, Handles, InitializedEvent, Logger, logger,
-	LoggingDebugSession, MemoryEvent, OutputEvent, Scope, Source, StoppedEvent, TerminatedEvent, Thread
+	LoggingDebugSession, MemoryEvent, OutputEvent, Scope, StoppedEvent, TerminatedEvent, Thread
 } from '@vscode/debugadapter';
 import { DebugProtocol } from '@vscode/debugprotocol';
 import { Subject } from 'await-notify';
-import { basename } from 'path';
 import { IRuntimeBreakpoint, PerlRuntimeWrapper, RuntimeVariable } from './perlRuntimeWrapper';
 
 
 export interface ILaunchRequestArguments extends DebugProtocol.LaunchRequestArguments {
 	program: string;
-	stopOnEntry?: boolean;
-	debug?: boolean;
+	debug: boolean;
+	stopOnEntry: boolean;
+	args?: string[];
 	cwd?: string;
 	env?: object[];
 }
 
 export class PerlDebugSession extends LoggingDebugSession {
 	private static threadId = 1;
-
-	// private _breakpointId = 1000;
-
-	// private _breakPoints = new Map<string, DebugProtocol.Breakpoint[]>();
 
 	private _configurationDone = new Subject();
 
@@ -30,8 +27,6 @@ export class PerlDebugSession extends LoggingDebugSession {
 	private _variableHandles = new Handles<'locals' | 'globals' | RuntimeVariable>();
 
 	private _cancellationTokens = new Map<number, boolean>();
-	private _reportProgress: boolean | undefined;
-	private _useInvalidatedEvent: boolean | undefined;
 
 	public constructor() {
 		super("perl-debug.txt");
@@ -42,6 +37,9 @@ export class PerlDebugSession extends LoggingDebugSession {
 		this.setDebuggerColumnsStartAt1(false);
 
 		// setup event handlers
+		this._runtime.on('stopOnEntry', () => {
+			this.sendEvent(new StoppedEvent('entry', PerlDebugSession.threadId));
+		});
 		this._runtime.on('stopOnStep', () => {
 			this.sendEvent(new StoppedEvent('step', PerlDebugSession.threadId));
 		});
@@ -78,13 +76,6 @@ export class PerlDebugSession extends LoggingDebugSession {
 	 */
 	protected initializeRequest(response: DebugProtocol.InitializeResponse, args: DebugProtocol.InitializeRequestArguments): void {
 
-		if (args.supportsProgressReporting) {
-			this._reportProgress = true;
-		}
-		if (args.supportsInvalidatedEvent) {
-			this._useInvalidatedEvent = true;
-		}
-
 		// build and return the capabilities of this debug adapter:
 		response.body = response.body || {};
 
@@ -95,16 +86,7 @@ export class PerlDebugSession extends LoggingDebugSession {
 		response.body.supportsEvaluateForHovers = true;
 
 		// make VS Code support data breakpoints
-		// response.body.supportsDataBreakpoints = true;
-
-		// make VS Code send cancel request
-		// response.body.supportsCancelRequest = true;
-
-		// make VS Code send the breakpointLocations request
-		// response.body.supportsBreakpointLocationsRequest = true;
-
-		// make VS Code send exceptionInfo request
-		// response.body.supportsExceptionInfoRequest = true;
+		response.body.supportsDataBreakpoints = true;
 
 		// make VS Code send setVariable request
 		response.body.supportsSetVariable = true;
@@ -137,65 +119,36 @@ export class PerlDebugSession extends LoggingDebugSession {
 		await this._configurationDone.wait(1000);
 
 		// start the program in the runtime
-		await this._runtime.start(args.program, !!args.stopOnEntry, !args.noDebug);
+		await this._runtime.start(args.program, !!args.stopOnEntry, args.debug, args.args || []);
 		this.sendResponse(response);
 	}
 
 	protected async setBreakPointsRequest(response: DebugProtocol.SetBreakpointsResponse, args: DebugProtocol.SetBreakpointsArguments): Promise<void> {
+		let bps: Breakpoint[] = [];
 
-		// send back the actual breakpoint positions
-		response.body = {
-			breakpoints: []
-		};
-		this.sendResponse(response);
-	}
-
-	protected async breakpointLocationsRequest(response: DebugProtocol.BreakpointLocationsResponse, args: DebugProtocol.BreakpointLocationsArguments, request?: DebugProtocol.Request): Promise<void> {
-
-		response.body = {
-			breakpoints: []
-		};
-
-		this.sendResponse(response);
-	}
-
-	protected async setExceptionBreakPointsRequest(response: DebugProtocol.SetExceptionBreakpointsResponse, args: DebugProtocol.SetExceptionBreakpointsArguments): Promise<void> {
-
-		let namedException: string | undefined = undefined;
-		let otherExceptions = false;
-
-		if (args.filterOptions) {
-			for (const filterOption of args.filterOptions) {
-				switch (filterOption.filterId) {
-					case 'namedException':
-						namedException = args.filterOptions[0].condition;
-						break;
-					case 'otherExceptions':
-						otherExceptions = true;
-						break;
+		if (args.breakpoints) {
+			for (let i = 0; i < args.breakpoints!.length; i++) {
+				const bp = args.breakpoints[i];
+				let success = false;
+				let line = bp.line;
+				while (success === false) {
+					// const lines = await this._runtime.request(`b ${line}\n`);
+					// if (lines.concat().includes('not breakable')) {
+					if (false) {
+						line++;
+					}
+					else {
+						// remember the actually verified breakpoint line
+						bps.push(new Breakpoint(true, line));
+						success = true;
+					}
 				}
 			}
 		}
 
-		if (args.filters) {
-			if (args.filters.indexOf('otherExceptions') >= 0) {
-				otherExceptions = true;
-			}
-		}
-
-		this.sendResponse(response);
-	}
-
-	protected exceptionInfoRequest(response: DebugProtocol.ExceptionInfoResponse, args: DebugProtocol.ExceptionInfoArguments) {
+		// send back the actual breakpoint positions
 		response.body = {
-			exceptionId: 'Exception ID',
-			description: 'This is a descriptive description of the exception.',
-			breakMode: 'always',
-			details: {
-				message: 'Message contained in the exception.',
-				typeName: 'Short type name of the exception object',
-				stackTrace: 'stack frame 1\nstack frame 2',
-			}
+			breakpoints: bps
 		};
 		this.sendResponse(response);
 	}
@@ -234,44 +187,6 @@ export class PerlDebugSession extends LoggingDebugSession {
 		this.sendResponse(response);
 	}
 
-	// protected async writeMemoryRequest(response: DebugProtocol.WriteMemoryResponse, { data, memoryReference, offset = 0 }: DebugProtocol.WriteMemoryArguments) {
-	// 	const variable = this._variableHandles.get(Number(memoryReference));
-	// 	if (typeof variable === 'object') {
-	// 		const decoded = base64.toByteArray(data);
-	// 		variable.setMemory(decoded, offset);
-	// 		response.body = { bytesWritten: decoded.length };
-	// 	} else {
-	// 		response.body = { bytesWritten: 0 };
-	// 	}
-
-	// 	this.sendResponse(response);
-	// 	this.sendEvent(new InvalidatedEvent(['variables']));
-	// }
-
-	// protected async readMemoryRequest(response: DebugProtocol.ReadMemoryResponse, { offset = 0, count, memoryReference }: DebugProtocol.ReadMemoryArguments) {
-	// 	const variable = this._variableHandles.get(Number(memoryReference));
-	// 	if (typeof variable === 'object' && variable.memory) {
-	// 		const memory = variable.memory.subarray(
-	// 			Math.min(offset, variable.memory.length),
-	// 			Math.min(offset + count, variable.memory.length),
-	// 		);
-
-	// 		response.body = {
-	// 			address: offset.toString(),
-	// 			data: base64.fromByteArray(memory),
-	// 			unreadableBytes: count - memory.length
-	// 		};
-	// 	} else {
-	// 		response.body = {
-	// 			address: offset.toString(),
-	// 			data: '',
-	// 			unreadableBytes: count
-	// 		};
-	// 	}
-
-	// 	this.sendResponse(response);
-	// }
-
 	protected async variablesRequest(response: DebugProtocol.VariablesResponse, args: DebugProtocol.VariablesArguments, request?: DebugProtocol.Request): Promise<void> {
 
 		let vs: RuntimeVariable[] = [];
@@ -304,23 +219,23 @@ export class PerlDebugSession extends LoggingDebugSession {
 		this.sendResponse(response);
 	}
 
-	protected continueRequest(response: DebugProtocol.ContinueResponse, args: DebugProtocol.ContinueArguments): void {
-		this._runtime.continue();
+	protected async continueRequest(response: DebugProtocol.ContinueResponse, args: DebugProtocol.ContinueArguments): Promise<void> {
+		await this._runtime.continue();
 		this.sendResponse(response);
 	}
 
-	protected reverseContinueRequest(response: DebugProtocol.ReverseContinueResponse, args: DebugProtocol.ReverseContinueArguments): void {
-		this._runtime.continue();
+	protected async nextRequest(response: DebugProtocol.NextResponse, args: DebugProtocol.NextArguments): Promise<void> {
+		await this._runtime.step();
 		this.sendResponse(response);
 	}
 
-	protected nextRequest(response: DebugProtocol.NextResponse, args: DebugProtocol.NextArguments): void {
-		this._runtime.step();
+	protected async stepInRequest(response: DebugProtocol.StepInResponse, args: DebugProtocol.StepInArguments): Promise<void> {
+		await this._runtime.stepIn();
 		this.sendResponse(response);
 	}
 
-	protected stepInRequest(response: DebugProtocol.StepInResponse, args: DebugProtocol.StepInArguments): void {
-		this._runtime.stepIn();
+	protected async stepOutRequest(response: DebugProtocol.StepOutResponse, args: DebugProtocol.StepOutArguments, request?: DebugProtocol.Request): Promise<void> {
+		await this._runtime.stepOut();
 		this.sendResponse(response);
 	}
 
@@ -381,15 +296,7 @@ export class PerlDebugSession extends LoggingDebugSession {
 		return dapVariable;
 	}
 
-	private formatAddress(x: number, pad = 8) {
-		return true ? '0x' + x.toString(16).padStart(8, '0') : x.toString(10);
-	}
-
 	private formatNumber(x: number) {
 		return true ? '0x' + x.toString(16) : x.toString(10);
-	}
-
-	private createSource(filePath: string): Source {
-		return new Source(basename(filePath), this.convertDebuggerPathToClient(filePath), undefined, undefined, 'mock-adapter-data');
 	}
 }

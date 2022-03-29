@@ -68,7 +68,6 @@ export class PerlRuntimeWrapper extends EventEmitter {
 	private _session!: ChildProcess;
 	// helper to run commands and parse output
 	private streamCatcher: StreamCatcher;
-	private lastArgs: [string, boolean, boolean] | undefined;
 
 	// maps from sourceFile to array of IRuntimeBreakpoint
 	private _breakPoints = new Map<string, IRuntimeBreakpoint[]>();
@@ -91,9 +90,7 @@ export class PerlRuntimeWrapper extends EventEmitter {
 	}
 
 	// Start executing the given program.
-	public async start(program: string, stopOnEntry: boolean, debug: boolean): Promise<void> {
-		this.lastArgs = [program, stopOnEntry, debug];
-
+	public async start(program: string, stopOnEntry: boolean, debug: boolean, args: string[]): Promise<void> {
 		// Spawn perl process and handle errors
 		const spawnOptions: SpawnOptions = {
 			detached: true,
@@ -108,6 +105,7 @@ export class PerlRuntimeWrapper extends EventEmitter {
 		const commandArgs = [
 			'-d',
 			program,
+			...args
 		];
 
 		this._session = spawn(
@@ -125,10 +123,12 @@ export class PerlRuntimeWrapper extends EventEmitter {
 			this.emit('output', data.toString());
 		});
 
-		await this.request("h\n");
-
-		if (stopOnEntry && debug) {
-			await this.step();
+		if (debug) {
+			if (stopOnEntry) {
+				await this.step('stopOnEntry');
+			} else {
+				await this.continue();
+			}
 		} else {
 			await this.continue();
 		}
@@ -153,44 +153,37 @@ export class PerlRuntimeWrapper extends EventEmitter {
 		return lines;
 	}
 
-	public async step() {
-		await this.request('n\n');
-		this.emit('stopOnStep');
+	public async step(signal: string = 'stopOnStep') {
+		const lines = await this.request('n\n');
+		const end = lines.join().includes('Debugged program terminated.');
+		if (end) {
+			this.emit('end');
+		}
+		this.emit(signal);
 	}
 
 	public async stepIn() {
-		await this.request('s\n');
+		const lines = await this.request('s\n');
+		const end = lines.join().includes('Debugged program terminated.');
+		if (end) {
+			this.emit('end');
+		}
 		this.emit('stopOnStep');
 	}
 
 	public async stepOut() {
-		await this.request('r\n');
+		const lines = await this.request('r\n');
+		const end = lines.join().includes('Debugged program terminated.');
+		if (end) {
+			this.emit('end');
+		}
 		this.emit('stopOnStep');
-	}
-
-	public async restart() {
-		await this.request('q\n');
-		await this.start(...this.lastArgs!);
-	}
-
-	public async terminate() {
-		await this.request('q\n');
-		this.emit('end');
 	}
 
 	public async clearAllDataBreakpoints() {
 		await this.request("B *\n");
 	}
 
-	public async setDataBreakpoint(): Promise<boolean> {
-		await this.request(`b *\n`);
-		// TODO: Validate Breakpoint
-		return true;
-	}
-
-	/**
-	 * Returns a fake 'stacktrace' where every 'stackframe' is a word from the current line.
-	 */
 	public async stack(): Promise<IRuntimeStack> {
 		const frames: IRuntimeStackFrame[] = [];
 

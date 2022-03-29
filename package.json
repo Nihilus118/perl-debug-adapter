@@ -90,6 +90,11 @@
                 "description": "Automatically stop after launch.",
                 "default": true
               },
+              "args": {
+                "type": "array",
+                "description": "Arguments passed at program launch.",
+                "default": []
+              },
               "debug": {
                 "type": "boolean",
                 "description": "Enable or disable debugging.",

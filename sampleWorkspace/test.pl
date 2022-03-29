@@ -10,6 +10,10 @@ my $b = 9595;
 
 print $a . "\n" . $b . "\n";
 
+foreach (@ARGV) {
+    print "$_\n";
+}
+
 foreach ( sort keys %ENV ) {
     print "$_ = $ENV{$_}\n";
 }

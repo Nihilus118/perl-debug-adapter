@@ -10,7 +10,13 @@
 			"name": "Perl Debug",
 			"program": "${workspaceFolder}/test.pl",
 			"stopOnEntry": true,
-			"debug": true
+			"debug": true,
+			"args": [
+				"test",
+				123,
+				true,
+				"log=testfile.log"
+			]
 		}
 	]
 }
