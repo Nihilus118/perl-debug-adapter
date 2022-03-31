@@ -53,11 +53,9 @@ export function activatePerlDebug(context: vscode.ExtensionContext, factory?: vs
 		});
 	}));
 
-	// register a configuration provider for 'mock' debug type
 	const provider = new PerlConfigurationProvider();
 	context.subscriptions.push(vscode.debug.registerDebugConfigurationProvider('perl', provider));
 
-	// register a dynamic configuration provider for 'mock' debug type
 	context.subscriptions.push(vscode.debug.registerDebugConfigurationProvider('perl', {
 		provideDebugConfigurations(): ProviderResult<DebugConfiguration[]> {
 			return [
@@ -153,8 +151,8 @@ class PerlConfigurationProvider implements vscode.DebugConfigurationProvider {
 		// if launch.json is missing or empty
 		if (!config.type && !config.request && !config.name) {
 			const editor = vscode.window.activeTextEditor;
-			if (editor && editor.document.languageId === 'markdown') {
-				config.type = 'mock';
+			if (editor && editor.document.languageId === 'perl') {
+				config.type = 'perl';
 				config.name = 'Launch';
 				config.request = 'launch';
 				config.program = '${file}';
