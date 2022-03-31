@@ -1,7 +1,7 @@
 import {
 	Breakpoint,
 	BreakpointEvent, Handles, InitializedEvent, Logger, logger,
-	LoggingDebugSession, MemoryEvent, OutputEvent, Scope, StoppedEvent, TerminatedEvent, Thread
+	LoggingDebugSession, MemoryEvent, OutputEvent, Scope, Source, StackFrame, StoppedEvent, TerminatedEvent, Thread, Variable
 } from '@vscode/debugadapter';
 import { DebugProtocol } from '@vscode/debugprotocol';
 import { Subject } from 'await-notify';
@@ -46,21 +46,14 @@ export class PerlDebugSession extends LoggingDebugSession {
 		this._runtime.on('stopOnBreakpoint', () => {
 			this.sendEvent(new StoppedEvent('breakpoint', PerlDebugSession.threadId));
 		});
-		this._runtime.on('stopOnDataBreakpoint', () => {
-			this.sendEvent(new StoppedEvent('data breakpoint', PerlDebugSession.threadId));
-		});
-		this._runtime.on('stopOnInstructionBreakpoint', () => {
-			this.sendEvent(new StoppedEvent('instruction breakpoint', PerlDebugSession.threadId));
-		});
 		this._runtime.on('stopOnException', (exception) => {
-			if (exception) {
-				this.sendEvent(new StoppedEvent(`exception(${exception})`, PerlDebugSession.threadId));
-			} else {
-				this.sendEvent(new StoppedEvent('exception', PerlDebugSession.threadId));
-			}
+			this.sendEvent(new StoppedEvent(`exception(${exception})`, PerlDebugSession.threadId));
+			this.sendEvent(
+				new StoppedEvent("postfork", PerlDebugSession.threadId)
+			);
 		});
 		this._runtime.on('breakpointValidated', (bp: IRuntimeBreakpoint) => {
-			this.sendEvent(new BreakpointEvent('changed', { verified: bp.verified, id: bp.id } as DebugProtocol.Breakpoint));
+			this.sendEvent(new BreakpointEvent('changed', { verified: bp.verified, line: bp.line } as DebugProtocol.Breakpoint));
 		});
 		this._runtime.on('output', (text: string) => {
 			this.sendEvent(new OutputEvent(`${text}`));
@@ -164,14 +157,27 @@ export class PerlDebugSession extends LoggingDebugSession {
 		this.sendResponse(response);
 	}
 
-	protected stackTraceRequest(response: DebugProtocol.StackTraceResponse, args: DebugProtocol.StackTraceArguments): void {
+	protected async stackTraceRequest(response: DebugProtocol.StackTraceResponse, args: DebugProtocol.StackTraceArguments): Promise<void> {
+		let stackFrames: StackFrame[] = [];
+
+		const lines = await this._runtime.request('T');
+		let count = 1;
+		for (let i = 0; i < lines.length; i++) {
+			const line = lines[i];
+			if (line.startsWith('@')) {
+				// TODO: More detailed parsing of stack frames
+				let nm = line.split(' = ')[1];
+				nm = nm.split("'")[0];
+				const fn = new Source(line.split("'")[1]);
+				const ln = line.split('line ')[1];
+				stackFrames.push(new StackFrame(count, nm, fn, +ln));
+				count++;
+			}
+		}
+
 		response.body = {
-			stackFrames: [],
-			// 4 options for 'totalFrames':
-			//omit totalFrames property: 	// VS Code has to probe/guess. Should result in a max. of two requests
-			totalFrames: 0			// stk.count is the correct size, should result in a max. of two requests
-			//totalFrames: 1000000 			// not the correct size, should result in a max. of two requests
-			//totalFrames: endFrame + 20 	// dynamically increases the size with every requested chunk, results in paging
+			stackFrames: stackFrames,
+			totalFrames: stackFrames.length
 		};
 		this.sendResponse(response);
 	}
@@ -181,7 +187,7 @@ export class PerlDebugSession extends LoggingDebugSession {
 		response.body = {
 			scopes: [
 				new Scope("Locals", this._variableHandles.create('locals'), false),
-				new Scope("Globals", this._variableHandles.create('globals'), true)
+				// new Scope("Globals", this._variableHandles.create('globals'), true)
 			]
 		};
 		this.sendResponse(response);
@@ -189,32 +195,31 @@ export class PerlDebugSession extends LoggingDebugSession {
 
 	protected async variablesRequest(response: DebugProtocol.VariablesResponse, args: DebugProtocol.VariablesArguments, request?: DebugProtocol.Request): Promise<void> {
 
-		let vs: RuntimeVariable[] = [];
+		let vs: Variable[] = [];
 
-		const v = this._variableHandles.get(args.variablesReference);
-		if (v === 'locals') {
-			vs = await this._runtime.getLocalVariables();
-		} else if (v === 'globals') {
-			if (request) {
-				this._cancellationTokens.set(request.seq, false);
-				vs = await this._runtime.getGlobalVariables(() => !!this._cancellationTokens.get(request.seq));
-				this._cancellationTokens.delete(request.seq);
-			} else {
-				vs = await this._runtime.getGlobalVariables();
+		const lines = await this._runtime.request("y\n");
+		for (let i = 0; i < lines.length; i++) {
+			const line = lines[i];
+			if (line.includes('=')) {
+				// Parse Hashes and Lists
+				const tmp = line.split(' = ');
+				const name = tmp[0];
+				const val = tmp[1];
+
+				vs.push(new Variable(name, val));
 			}
-		} else if (v && Array.isArray(v.value)) {
-			vs = v.value;
 		}
 
 		response.body = {
-			variables: vs.map(v => this.convertFromRuntime(v))
+			variables: vs
 		};
+
 		this.sendResponse(response);
 	}
 
 	protected setVariableRequest(response: DebugProtocol.SetVariableResponse, args: DebugProtocol.SetVariableArguments): void {
 
-		this.sendEvent(new MemoryEvent("test", 0, 1));
+		// this.sendEvent(new MemoryEvent("test", 0, 1));
 
 		this.sendResponse(response);
 	}
@@ -237,66 +242,5 @@ export class PerlDebugSession extends LoggingDebugSession {
 	protected async stepOutRequest(response: DebugProtocol.StepOutResponse, args: DebugProtocol.StepOutArguments, request?: DebugProtocol.Request): Promise<void> {
 		await this._runtime.stepOut();
 		this.sendResponse(response);
-	}
-
-	private convertFromRuntime(v: RuntimeVariable): DebugProtocol.Variable {
-
-		let dapVariable: DebugProtocol.Variable = {
-			name: v.name,
-			value: '???',
-			type: typeof v.value,
-			variablesReference: 0,
-			evaluateName: '$' + v.name
-		};
-
-		if (v.name.indexOf('lazy') >= 0) {
-			// a "lazy" variable needs an additional click to retrieve its value
-
-			dapVariable.value = 'lazy var';		// placeholder value
-			v.reference ??= this._variableHandles.create(new RuntimeVariable('', [new RuntimeVariable('', v.value)]));
-			dapVariable.variablesReference = v.reference;
-			dapVariable.presentationHint = { lazy: true };
-		} else {
-
-			if (Array.isArray(v.value)) {
-				dapVariable.value = 'Object';
-				v.reference ??= this._variableHandles.create(v);
-				dapVariable.variablesReference = v.reference;
-			} else {
-
-				switch (typeof v.value) {
-					case 'number':
-						if (Math.round(v.value) === v.value) {
-							dapVariable.value = this.formatNumber(v.value);
-							(<any>dapVariable).__vscodeVariableMenuContext = 'simple';	// enable context menu contribution
-							dapVariable.type = 'integer';
-						} else {
-							dapVariable.value = v.value.toString();
-							dapVariable.type = 'float';
-						}
-						break;
-					case 'string':
-						dapVariable.value = `"${v.value}"`;
-						break;
-					case 'boolean':
-						dapVariable.value = v.value ? 'true' : 'false';
-						break;
-					default:
-						dapVariable.value = typeof v.value;
-						break;
-				}
-			}
-		}
-
-		if (v.memory) {
-			v.reference ??= this._variableHandles.create(v);
-			dapVariable.memoryReference = String(v.reference);
-		}
-
-		return dapVariable;
-	}
-
-	private formatNumber(x: number) {
-		return true ? '0x' + x.toString(16) : x.toString(10);
 	}
 }

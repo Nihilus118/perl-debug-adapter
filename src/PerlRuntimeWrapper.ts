@@ -140,15 +140,17 @@ export class PerlRuntimeWrapper extends EventEmitter {
 
 	public async continue() {
 		const lines = await this.request('c\n');
-		const end = lines.join().includes('Debugged program terminated.');
+		const text = lines.join();
+		const end = text.includes('Debugged program terminated.');
 		if (end) {
 			this.emit('end');
+		} else {
+			this.emit('stopOnBreakpoint');
 		}
-		this.emit('stopOnBreakpoint');
 	}
 
 	public async getBreakpoints() {
-		const lines = await this.request("L");
+		const lines = await this.request("L b");
 		// TODO: Parse breakpoints
 		return lines;
 	}
@@ -188,7 +190,7 @@ export class PerlRuntimeWrapper extends EventEmitter {
 		const frames: IRuntimeStackFrame[] = [];
 
 		// Run command and await the Output
-		const lines = await this.request('T\n') || [];
+		const lines = await this.request('T\n');
 		// TODO: Regex to validate data
 
 		return {
