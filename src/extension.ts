@@ -22,12 +22,12 @@ export function activate(context: vscode.ExtensionContext) {
 	switch (runMode) {
 		case 'server':
 			// run the debug adapter as a server inside the extension and communicate via a socket
-			activatePerlDebug(context, new MockDebugAdapterServerDescriptorFactory());
+			activatePerlDebug(context, new PerlDebugAdapterServerDescriptorFactory());
 			break;
 
 		case 'namedPipeServer':
 			// run the debug adapter as a server inside the extension and communicate via a named pipe (Windows) or UNIX domain socket (non-Windows)
-			activatePerlDebug(context, new MockDebugAdapterNamedPipeServerDescriptorFactory());
+			activatePerlDebug(context, new PerlDebugAdapterNamedPipeServerDescriptorFactory());
 			break;
 
 		case 'external': default:
@@ -73,7 +73,7 @@ class DebugAdapterExecutableFactory implements vscode.DebugAdapterDescriptorFact
 	}
 }
 
-class MockDebugAdapterServerDescriptorFactory implements vscode.DebugAdapterDescriptorFactory {
+class PerlDebugAdapterServerDescriptorFactory implements vscode.DebugAdapterDescriptorFactory {
 
 	private server?: Net.Server;
 
@@ -99,7 +99,7 @@ class MockDebugAdapterServerDescriptorFactory implements vscode.DebugAdapterDesc
 	}
 }
 
-class MockDebugAdapterNamedPipeServerDescriptorFactory implements vscode.DebugAdapterDescriptorFactory {
+class PerlDebugAdapterNamedPipeServerDescriptorFactory implements vscode.DebugAdapterDescriptorFactory {
 
 	private server?: Net.Server;
 
