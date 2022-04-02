@@ -89,7 +89,7 @@ export class StreamCatcher extends EventEmitter {
         return this.request(null);
     }
 
-    readline(line) {
+    readline(line: string) {
         this.logDebug('line:', line);
         // this.logDebug('data:', [...line]);
         this.buffer.push(line);
@@ -103,7 +103,7 @@ export class StreamCatcher extends EventEmitter {
         }
     }
 
-    resolveRequest(data) {
+    resolveRequest(data: string[]) {
         const req = this.requestRunning;
         if (req) {
             if (req.command) {

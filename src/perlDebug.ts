@@ -1,32 +1,40 @@
 import {
 	Breakpoint,
 	BreakpointEvent, Handles, InitializedEvent, Logger, logger,
-	LoggingDebugSession, MemoryEvent, OutputEvent, Scope, Source, StackFrame, StoppedEvent, TerminatedEvent, Thread, Variable
+	LoggingDebugSession, OutputEvent, Scope, Source, StackFrame, StoppedEvent, TerminatedEvent, Thread, Variable
 } from '@vscode/debugadapter';
 import { DebugProtocol } from '@vscode/debugprotocol';
 import { Subject } from 'await-notify';
-import { IRuntimeBreakpoint, PerlRuntimeWrapper, RuntimeVariable } from './perlRuntimeWrapper';
+import { PerlRuntimeWrapper } from './perlRuntimeWrapper';
 
 
 export interface ILaunchRequestArguments extends DebugProtocol.LaunchRequestArguments {
 	program: string;
 	debug: boolean;
 	stopOnEntry: boolean;
+	perlExecutable?: string;
 	args?: string[];
 	cwd?: string;
 	env?: object[];
 }
 
+export interface IBreakpointData {
+	line: number,
+	id: number;
+}
+
 export class PerlDebugSession extends LoggingDebugSession {
 	private static threadId = 1;
+	private currentVarRef = 999;
+	private currentBreakpointID = 1;
 
 	private _configurationDone = new Subject();
 
 	private _runtime: PerlRuntimeWrapper;
 
-	private _variableHandles = new Handles<'locals' | 'globals' | RuntimeVariable>();
-
-	private _cancellationTokens = new Map<number, boolean>();
+	private _variableHandles = new Handles<'locals' | 'globals'>();
+	private varsMap = new Map<number, Variable[]>();
+	private bps: IBreakpointData[] = [];
 
 	public constructor() {
 		super("perl-debug.txt");
@@ -52,8 +60,8 @@ export class PerlDebugSession extends LoggingDebugSession {
 				new StoppedEvent("postfork", PerlDebugSession.threadId)
 			);
 		});
-		this._runtime.on('breakpointValidated', (bp: IRuntimeBreakpoint) => {
-			this.sendEvent(new BreakpointEvent('changed', { verified: bp.verified, line: bp.line } as DebugProtocol.Breakpoint));
+		this._runtime.on('breakpointValidated', (bp: [boolean, number, number]) => {
+			this.sendEvent(new BreakpointEvent('changed', { verified: bp[0], line: bp[1], id: bp[2] } as DebugProtocol.Breakpoint));
 		});
 		this._runtime.on('output', (text: string) => {
 			this.sendEvent(new OutputEvent(`${text}`));
@@ -105,6 +113,10 @@ export class PerlDebugSession extends LoggingDebugSession {
 
 	protected async launchRequest(response: DebugProtocol.LaunchResponse, args: ILaunchRequestArguments) {
 
+		// clear parsed variables
+		this.varsMap.clear();
+		this.currentVarRef = 999;
+
 		// make sure to 'Stop' the buffered logging if 'trace' is not set
 		logger.setup(Logger.LogLevel.Verbose, false);
 
@@ -112,31 +124,29 @@ export class PerlDebugSession extends LoggingDebugSession {
 		await this._configurationDone.wait(1000);
 
 		// start the program in the runtime
-		await this._runtime.start(args.program, !!args.stopOnEntry, args.debug, args.args || []);
+		await this._runtime.start(
+			args.perlExecutable || 'perl',
+			args.program,
+			!!args.stopOnEntry,
+			args.debug, args.args || [],
+			this.bps
+		);
 		this.sendResponse(response);
 	}
 
 	protected async setBreakPointsRequest(response: DebugProtocol.SetBreakpointsResponse, args: DebugProtocol.SetBreakpointsArguments): Promise<void> {
-		let bps: Breakpoint[] = [];
+		// save breakpoints in memory
+		const clientLines = args.lines || [];
 
-		if (args.breakpoints) {
-			for (let i = 0; i < args.breakpoints!.length; i++) {
-				const bp = args.breakpoints[i];
-				let success = false;
-				let line = bp.line;
-				while (success === false) {
-					// const lines = await this._runtime.request(`b ${line}\n`);
-					// if (lines.concat().includes('not breakable')) {
-					if (false) {
-						line++;
-					}
-					else {
-						// remember the actually verified breakpoint line
-						bps.push(new Breakpoint(true, line));
-						success = true;
-					}
-				}
-			}
+		// set breakpoints inside the debugger
+		let bps: Breakpoint[] = [];
+		this.currentBreakpointID = 1;
+		for (let i = 0; i < clientLines.length; i++) {
+			const bp = new Breakpoint(false, clientLines[i]);
+			bp.setId(this.currentBreakpointID);
+			this.bps.push({ id: this.currentBreakpointID, line: clientLines[i] } as IBreakpointData);
+			bps.push(bp);
+			this.currentBreakpointID++;
 		}
 
 		// send back the actual breakpoint positions
@@ -195,32 +205,150 @@ export class PerlDebugSession extends LoggingDebugSession {
 
 	protected async variablesRequest(response: DebugProtocol.VariablesResponse, args: DebugProtocol.VariablesArguments, request?: DebugProtocol.Request): Promise<void> {
 
-		let vs: Variable[] = [];
-
-		const lines = await this._runtime.request("y\n");
-		for (let i = 0; i < lines.length; i++) {
-			const line = lines[i];
-			if (line.includes('=')) {
-				// Parse Hashes and Lists
-				const tmp = line.split(' = ');
-				const name = tmp[0];
-				const val = tmp[1];
-
-				vs.push(new Variable(name, val));
-			}
-		}
-
 		response.body = {
-			variables: vs
+			variables: await this.parseVars(args.variablesReference)
 		};
 
 		this.sendResponse(response);
 	}
 
+	private async parseVars(ref: number): Promise<Variable[]> {
+		let vs: Variable[] = [];
+
+		// Get all top level vars
+		if (ref >= 1000) {
+			const lines = await this._runtime.request("y");
+			for (let i = 0; i < lines.length; i++) {
+				const line = lines[i];
+				// we reached a new variable
+				if (line.includes(' = ')) {
+					const type = line.charAt(0);
+					let newVars: Variable;
+					switch (type) {
+						case '$':
+							// Parse hashes
+							newVars = this.parseScalar(lines, i);
+							break;
+						case '@':
+							// Parse lists
+							newVars = this.parseList(lines, i);
+							break;
+						case '%':
+							// Parse hashes
+							newVars = this.parseHash(lines, i);
+							break;
+						default:
+							newVars = this.parseScalar(lines, i);
+							break;
+					}
+					// add new variables to list
+					vs.push(newVars);
+				}
+			}
+		} else {
+			// Get already parsed vars from map
+			const newVars = this.varsMap.get(ref);
+			if (newVars) {
+				vs = vs.concat(newVars);
+			}
+		}
+
+		// return all vars
+		return vs;
+	}
+
+	private parseScalar(lines: string[], i: number): Variable {
+		const tmp = lines[i].split(' = ');
+		return new Variable(tmp[0], tmp[1]);
+	}
+
+	private parseList(lines: string[], i: number): Variable {
+		const name = lines[i].split(' = ')[0];
+		const ref = this.currentVarRef;
+		const v = new Variable(name, '', ref);
+
+		// parse child variables
+		let cv: Variable[] = [];
+		let parsed = false;
+		for (let j = i + 1; parsed === false; j++) {
+			const line = lines[j].trim();
+
+			if (line === ')') {
+				parsed = true;
+			} else {
+				// add new variables to list
+				const tmp = line.split(' ');
+				let newVar: Variable;
+				switch (tmp[0].charAt(0)) {
+					case '@':
+						newVar = this.parseList(lines, j);
+						break;
+					case '%':
+						newVar = this.parseHash(lines, j);
+						break;
+					default:
+						newVar = new Variable(tmp[0], tmp[2]);
+						break;
+				}
+				cv.push(newVar);
+			}
+		}
+
+		this.varsMap.set(ref, cv);
+
+		this.currentVarRef--;
+
+		return v;
+	}
+
+	private parseHash(lines: string[], i: number): Variable {
+		const name = lines[i].split(' = ')[0];
+		const ref = this.currentVarRef;
+		const v = new Variable(name, '', ref);
+
+		// parse child variables
+		let cv: Variable[] = [];
+		let parsed = false;
+		for (let j = i + 1; parsed === false; j++) {
+			const line = lines[j].trim();
+
+			if (line === ')') {
+				parsed = true;
+			}
+			else if (line === 'empty hash') {
+				parsed = true;
+				v.value = 'empty hash';
+			}
+			else {
+				// add new variables to list
+				const tmp = line.split(' => ');
+				let newVar: Variable;
+				switch (tmp[0].charAt(0)) {
+					case '@':
+						newVar = this.parseList(lines, j);
+						break;
+					case '%':
+						newVar = this.parseHash(lines, j);
+						break;
+					default:
+						newVar = new Variable(tmp[0], tmp[1]);
+						break;
+				}
+				cv.push(newVar);
+			}
+		}
+
+		this.varsMap.set(ref, cv);
+
+		this.currentVarRef--;
+
+		return v;
+	}
+
 	protected setVariableRequest(response: DebugProtocol.SetVariableResponse, args: DebugProtocol.SetVariableArguments): void {
-
-		// this.sendEvent(new MemoryEvent("test", 0, 1));
-
+		// TODO: Check variable and value type
+		this._runtime.request(`${args.name} = ${args.value}`);
+		response.body = { value: `${args.value}` };
 		this.sendResponse(response);
 	}
 

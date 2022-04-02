@@ -4,63 +4,12 @@
 
 import { ChildProcess, spawn, SpawnOptions } from 'child_process';
 import { EventEmitter } from 'events';
+import { IBreakpointData } from './perlDebug';
 import { StreamCatcher } from './streamCatcher';
 
 export interface IRuntimeBreakpoint {
-	id: number;
 	line: number;
 	verified: boolean;
-}
-
-interface IRuntimeStackFrame {
-	index: number;
-	name: string;
-	file: string;
-	line: number;
-	column?: number;
-	instruction?: number;
-}
-
-interface IRuntimeStack {
-	count: number;
-	frames: IRuntimeStackFrame[];
-}
-
-export type IRuntimeVariableType = number | boolean | string | RuntimeVariable[];
-
-export class RuntimeVariable {
-	private _memory?: Uint8Array;
-
-	public reference?: number;
-
-	public get value() {
-		return this._value;
-	}
-
-	public set value(value: IRuntimeVariableType) {
-		this._value = value;
-		this._memory = undefined;
-	}
-
-	public get memory() {
-		if (this._memory === undefined && typeof this._value === 'string') {
-			this._memory = new TextEncoder().encode(this._value);
-		}
-		return this._memory;
-	}
-
-	constructor(public readonly name: string, private _value: IRuntimeVariableType) { }
-
-	public setMemory(data: Uint8Array, offset = 0) {
-		const memory = this.memory;
-		if (!memory) {
-			return;
-		}
-
-		memory.set(data, offset);
-		this._memory = memory;
-		this._value = new TextDecoder().decode(memory);
-	}
 }
 
 export class PerlRuntimeWrapper extends EventEmitter {
@@ -75,11 +24,6 @@ export class PerlRuntimeWrapper extends EventEmitter {
 		return this._breakPoints;
 	}
 
-	// since we want to send breakpoint events, we will assign an id to every event
-	// so that the frontend can match events with breakpoints.
-	private breakpointId = 1;
-	private _lastSTDOUT: any;
-
 	constructor() {
 		super();
 		this.streamCatcher = new StreamCatcher();
@@ -90,7 +34,7 @@ export class PerlRuntimeWrapper extends EventEmitter {
 	}
 
 	// Start executing the given program.
-	public async start(program: string, stopOnEntry: boolean, debug: boolean, args: string[]): Promise<void> {
+	public async start(perlExecutable: string, program: string, stopOnEntry: boolean, debug: boolean, args: string[], bps: IBreakpointData[]): Promise<void> {
 		// Spawn perl process and handle errors
 		const spawnOptions: SpawnOptions = {
 			detached: true,
@@ -109,23 +53,53 @@ export class PerlRuntimeWrapper extends EventEmitter {
 		];
 
 		this._session = spawn(
-			'perl',
+			perlExecutable,
 			commandArgs,
 			spawnOptions
 		);
+
+		this._session.on('error', err => {
+			this.emit('output', `Couldn't start the Debugger! ${err.name} : ${err.message}`);
+			this.emit('end');
+			return;
+		});
+
+		this._session.stdout!.on('data', (data) => {
+			this.emit('output', data.toString());
+		});
 
 		await this.streamCatcher.launch(
 			this._session.stdin!,
 			this._session.stderr!
 		);
 
-		this._session.stdout!.on('data', (data) => {
-			this.emit('output', data.toString());
-		});
 
 		if (debug) {
+			// use PadWalker to access variables in scope
+			const lines = await this.request('use PadWalker qw/peek_our peek_my/;');
+			if (lines.join().includes('Can\'t locate')) {
+				this.emit('output', `Couldn't start the Debugger! Module PadWalker is required to run this debugger`);
+				this.emit('end');
+			}
+			// set breakpoints
+			for (let i = 0; i < bps.length; i++) {
+				const bp = bps[i];
+				let line = bp.line;
+				let success = false;
+				while (success === false) {
+					const data = (await this.request(`b ${line}`)).join("");
+					if (data.includes('not breakable')) {
+						// try again at the next line
+						line++;
+					} else {
+						// a breakable line was found and the breakpoint set
+						this.emit('breakpointValidated', [true, line, bp.id]);
+						success = true;
+					}
+				}
+			}
 			if (stopOnEntry) {
-				await this.step('stopOnEntry');
+				this.emit('stopOnEntry');
 			} else {
 				await this.continue();
 			}
@@ -135,14 +109,18 @@ export class PerlRuntimeWrapper extends EventEmitter {
 	}
 
 	async request(command: string): Promise<string[]> {
-		return await this.streamCatcher.request(command);
+		return (await this.streamCatcher.request(command)).filter(function (e) { return e; });
 	}
 
 	public async continue() {
-		const lines = await this.request('c\n');
+		const lines = await this.request('c');
 		const text = lines.join();
-		const end = text.includes('Debugged program terminated.');
-		if (end) {
+		if (text.includes('Debugged program terminated.')) {
+			if (text.includes('Died')) {
+				this.emit('output', lines.find(e => {
+					return e.includes('Died');
+				}) as string);
+			}
 			this.emit('end');
 		} else {
 			this.emit('stopOnBreakpoint');
@@ -156,7 +134,7 @@ export class PerlRuntimeWrapper extends EventEmitter {
 	}
 
 	public async step(signal: string = 'stopOnStep') {
-		const lines = await this.request('n\n');
+		const lines = await this.request('n');
 		const end = lines.join().includes('Debugged program terminated.');
 		if (end) {
 			this.emit('end');
@@ -165,7 +143,7 @@ export class PerlRuntimeWrapper extends EventEmitter {
 	}
 
 	public async stepIn() {
-		const lines = await this.request('s\n');
+		const lines = await this.request('s');
 		const end = lines.join().includes('Debugged program terminated.');
 		if (end) {
 			this.emit('end');
@@ -174,7 +152,7 @@ export class PerlRuntimeWrapper extends EventEmitter {
 	}
 
 	public async stepOut() {
-		const lines = await this.request('r\n');
+		const lines = await this.request('r');
 		const end = lines.join().includes('Debugged program terminated.');
 		if (end) {
 			this.emit('end');
@@ -182,134 +160,8 @@ export class PerlRuntimeWrapper extends EventEmitter {
 		this.emit('stopOnStep');
 	}
 
-	public async clearAllDataBreakpoints() {
-		await this.request("B *\n");
-	}
 
-	public async stack(): Promise<IRuntimeStack> {
-		const frames: IRuntimeStackFrame[] = [];
-
-		// Run command and await the Output
-		const lines = await this.request('T\n');
-		// TODO: Regex to validate data
-
-		return {
-			frames: frames,
-			count: frames.length
-		};
-	}
-
-	/*
-	 * Set breakpoint in file with given line.
-	 */
-	public async setBreakPoint(path: string, line: number): Promise<IRuntimeBreakpoint> {
-		path = this.normalizePathAndCasing(path);
-		// remember the set breakpoints
-		let bps = this.breakPoints.get(path);
-		if (!bps) {
-			bps = new Array<IRuntimeBreakpoint>();
-			this.breakPoints.set(path, bps);
-		}
-
-		// TODO: Set and parse breakpoints
-		let success = true;
-		while (!success && this._session) {
-			const data = (await this.request(`b ${line}\n`)).join("");
-			if (data.includes('not breakable')) {
-				// try again at the next line
-				line++;
-			} else {
-				// a breakable line was found and the breakpoint set
-				success = true;
-			}
-		}
-		const bp: IRuntimeBreakpoint = { verified: success, line, id: this.breakpointId++ };
-		bps.push(bp);
-
-		return bp;
-	}
-
-	public async clearBreakPoint(path: string, line: number): Promise<IRuntimeBreakpoint | undefined> {
-		// get all breakpoints for file
-		const bps = this.breakPoints.get(this.normalizePathAndCasing(path));
-		if (bps) {
-			const index = bps.findIndex(bp => bp.line === line);
-			if (index >= 0) {
-				const bp = bps[index];
-				bps.splice(index, 1);
-				await this.request(`B ${bp.line}\n`);
-				return bp;
-			}
-		}
-		return undefined;
-	}
-
-	public async clearBreakpoints(path: string): Promise<void> {
-		// delete all breakpoints
-		if (this._session) {
-			await this.request('B *\n');
-		}
-		this.breakPoints.delete(this.normalizePathAndCasing(path));
-	}
-
-	public async getGlobalVariables(cancellationToken?: () => boolean): Promise<RuntimeVariable[]> {
-
-		let a: RuntimeVariable[] = [];
-
-		const lines = await this.request('X\n');
-		// TODO: parsing
-		for (let i = 0; i < lines.length; i++) {
-			a.push(new RuntimeVariable(`global_${i}`, i));
-			if (cancellationToken && cancellationToken()) {
-				break;
-			}
-		}
-
-		return a;
-	}
-
-	public async getLocalVariables(): Promise<RuntimeVariable[]> {
-		const lines = await this.request('X\n');
-		// TODO: parse data and create RunTimeVariable objects
-		let a: RuntimeVariable[] = [];
-		return a;
-	}
-
-	public async getLocalVariable(name: string): Promise<RuntimeVariable | undefined> {
-		const command = `x \\${name}\n`;
-		const lines = await this.request(command);
-		// TODO: Parse local variables
-		if (this._lastSTDOUT) {
-			if (!this._lastSTDOUT.includes("empty")) {
-				const lines = this._lastSTDOUT!.split("\n");
-				const type = lines[0].split(" ")[1].split("(")[0];
-				let value = "";
-				// TODO: parse stdout and create RunTimeVariable object
-
-				switch (type) {
-					case 'SCALAR':
-						value = lines[1].split("-> ")[1];
-						break;
-					case 'ARRAY':
-
-						break;
-					case 'HASH':
-
-						break;
-
-					default:
-						break;
-				}
-
-				let a: RuntimeVariable = new RuntimeVariable(value, type);
-				return a;
-			}
-		}
-
-		return undefined;
-	}
-
-	private normalizePathAndCasing(path: string) {
+	public normalizePathAndCasing(path: string) {
 		if (process.platform === 'win32') {
 			return path.replace(/\//g, '\\').toLowerCase();
 		} else {
