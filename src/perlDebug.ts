@@ -272,7 +272,12 @@ export class PerlDebugSession extends LoggingDebugSession {
 				switch (v.charAt(0)) {
 					case '$':
 						output = await this._runtime.request(`print STDERR (defined ${v} ? ${v} : 'undef')`);
-						vs.push(new Variable(v, output[1]));
+						if (output[1].includes('HASH')) {
+							output = await this._runtime.request(`x ${v}`);
+						}
+						else {
+							vs.push(new Variable(v, output[1]));
+						}
 						break;
 					case '@':
 						const seperator = randomUUID();
@@ -292,13 +297,8 @@ export class PerlDebugSession extends LoggingDebugSession {
 						const json = (await this._runtime.request(`print STDERR (defined \\${v} ? encode_json(\\${v}) : '{}')`))[1];
 						vs.push(new Variable(v, json, this.currentVarRef));
 						// child variables
-						this.currentVarRef--;
-						break;
 						const jsonParsed: object[] = JSON.parse(json);
-						cv = [];
-						for (let i = 0; i < jsonParsed.length; i++) {
-							cv.push(new Variable(i.toString(), `${jsonParsed[i]}`));
-						}
+						this.parseHashChilds(jsonParsed);
 						break;
 				}
 			}
@@ -314,14 +314,25 @@ export class PerlDebugSession extends LoggingDebugSession {
 		return vs;
 	}
 
-	private parseHashChilds(childs: object[]) {
+	private parseHashChilds(childs: object) {
 		let cv: Variable[] = [];
-		for (let i = 0; i < childs.length; i++) {
-			cv.push(new Variable(i.toString(), `${childs[i]}`));
-		}
-		this.varsMap.set(this.currentVarRef, cv);
+		const ref = this.currentVarRef;
 		this.currentVarRef--;
+		for (let child in childs) {
+			if (this.isObject(childs[child])) {
+				cv.push(new Variable(`${child}`, `${JSON.stringify(childs[child])}`, this.currentVarRef));
+				// call this function recursivly to also parse the childs of a child
+				this.parseHashChilds(childs[child]);
+			} else {
+				cv.push(new Variable(`${child}`, `${childs[child]}`));
+			}
+		}
+		this.varsMap.set(ref, cv);
 	}
+
+	private isObject(a: any) {
+		return (!!a) && (a.constructor === Object);
+	};
 
 	protected setVariableRequest(response: DebugProtocol.SetVariableResponse, args: DebugProtocol.SetVariableArguments): void {
 		// TODO: Check variable and value type
