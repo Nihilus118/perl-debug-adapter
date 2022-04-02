@@ -274,6 +274,7 @@ export class PerlDebugSession extends LoggingDebugSession {
 						output = await this._runtime.request(`print STDERR (defined ${v} ? ${v} : 'undef')`);
 						if (output[1].includes('HASH')) {
 							output = await this._runtime.request(`x ${v}`);
+							break;
 						}
 						else {
 							vs.push(new Variable(v, output[1]));
@@ -296,9 +297,11 @@ export class PerlDebugSession extends LoggingDebugSession {
 						// parent variable
 						const json = (await this._runtime.request(`print STDERR (defined \\${v} ? encode_json(\\${v}) : '{}')`))[1];
 						vs.push(new Variable(v, json, this.currentVarRef));
-						// child variables
-						const jsonParsed: object[] = JSON.parse(json);
-						this.parseHashChilds(jsonParsed);
+						if (json.startsWith('{') && json.endsWith('}')) {
+							// child variables
+							const jsonParsed: object[] = JSON.parse(json);
+							this.parseHashChilds(jsonParsed);
+						}
 						break;
 				}
 			}
