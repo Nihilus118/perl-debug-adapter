@@ -76,9 +76,9 @@ export class PerlRuntimeWrapper extends EventEmitter {
 
 		if (debug) {
 			// use PadWalker to access variables in scope
-			const lines = await this.request('use PadWalker qw/peek_our peek_my/;');
+			const lines = await this.request('use PadWalker qw/peek_our peek_my/; use JSON;');
 			if (lines.join().includes('Can\'t locate')) {
-				this.emit('output', `Couldn't start the Debugger! Module PadWalker is required to run this debugger`);
+				this.emit('output', `Couldn't start the Debugger! Modules JSON and PadWalker are required to run this debugger. Please install them and try again.`);
 				this.emit('end');
 			}
 			// set breakpoints

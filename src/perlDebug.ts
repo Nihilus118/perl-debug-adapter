@@ -5,6 +5,7 @@ import {
 } from '@vscode/debugadapter';
 import { DebugProtocol } from '@vscode/debugprotocol';
 import { Subject } from 'await-notify';
+import { randomUUID } from 'crypto';
 import { PerlRuntimeWrapper } from './perlRuntimeWrapper';
 
 
@@ -197,7 +198,7 @@ export class PerlDebugSession extends LoggingDebugSession {
 		response.body = {
 			scopes: [
 				new Scope("Locals", this._variableHandles.create('locals'), false),
-				// new Scope("Globals", this._variableHandles.create('globals'), true)
+				new Scope("Globals", this._variableHandles.create('globals'), true)
 			]
 		};
 		this.sendResponse(response);
@@ -216,33 +217,89 @@ export class PerlDebugSession extends LoggingDebugSession {
 		let vs: Variable[] = [];
 
 		// Get all top level vars
+		// 1000 => my
+		// 1001 => our
+		// 1002 => global
+		// < 1000 => nested vars
 		if (ref >= 1000) {
-			const lines = await this._runtime.request("y");
-			for (let i = 0; i < lines.length; i++) {
-				const line = lines[i];
-				// we reached a new variable
-				if (line.includes(' = ')) {
-					const type = line.charAt(0);
-					let newVars: Variable;
-					switch (type) {
-						case '$':
-							// Parse hashes
-							newVars = this.parseScalar(lines, i);
-							break;
-						case '@':
-							// Parse lists
-							newVars = this.parseList(lines, i);
-							break;
-						case '%':
-							// Parse hashes
-							newVars = this.parseHash(lines, i);
-							break;
-						default:
-							newVars = this.parseScalar(lines, i);
-							break;
-					}
-					// add new variables to list
-					vs.push(newVars);
+			let vars: string[] = [];
+			if (ref % 2 === 0) {
+				vars = (await this._runtime.request('foreach(sort(keys( % { peek_our(2); }), keys( % { peek_my(2); }))) { print STDERR "$_|"; }'))[1].split('|');
+			}
+			else if (ref % 2 === 1) {
+				vars = [
+					"@ARGV",
+					"@INC",
+					"@F",
+					"%INC",
+					"%ENV",
+					"%SIG",
+					"$ARG",
+					"$NR",
+					"$RS",
+					"$OFS",
+					"$ORS",
+					"$LIST_SEPARATOR",
+					"$SUBSCRIPT_SEPARATOR",
+					"$FORMAT_FORMFEED",
+					"$FORMAT_LINE_BREAK_CHARACTERS",
+					"$ACCUMULATOR",
+					"$CHILD_ERROR",
+					"$ERRNO",
+					"$EVAL_ERROR",
+					"$PID",
+					"$UID",
+					"$EUID",
+					"$GID",
+					"$EGID",
+					"$PROGRAM_NAME",
+					"$PERL_VERSION",
+					"$DEBUGGING",
+					"$INPLACE_EDIT",
+					"$OSNAME",
+					"$PERLDB",
+					"$BASETIME",
+					"$WARNING",
+					"$EXECUTABLE_NAME",
+					"$ARGV"
+				];
+			}
+
+			for (let i = 0; i < vars.length; i++) {
+				const v = vars[i];
+				let output: string[];
+				let cv: Variable[];
+				switch (v.charAt(0)) {
+					case '$':
+						output = await this._runtime.request(`print STDERR (defined ${v} ? ${v} : 'undef')`);
+						vs.push(new Variable(v, output[1]));
+						break;
+					case '@':
+						const seperator = randomUUID();
+						output = (await this._runtime.request(`print STDERR (${v} > 0 ? join('${seperator}', ${v}) : '${seperator}')`))[1].split(seperator).filter(e => { return e !== ''; });;
+						// parent variable
+						vs.push(new Variable(v, `( ${output.join(', ')} )`, this.currentVarRef));
+						// child variables
+						cv = [];
+						for (let i = 0; i < output.length; i++) {
+							cv.push(new Variable(i.toString(), output[i]));
+						}
+						this.varsMap.set(this.currentVarRef, cv);
+						this.currentVarRef--;
+						break;
+					case '%':
+						// parent variable
+						const json = (await this._runtime.request(`print STDERR (defined \\${v} ? encode_json(\\${v}) : '{}')`))[1];
+						vs.push(new Variable(v, json, this.currentVarRef));
+						// child variables
+						this.currentVarRef--;
+						break;
+						const jsonParsed: object[] = JSON.parse(json);
+						cv = [];
+						for (let i = 0; i < jsonParsed.length; i++) {
+							cv.push(new Variable(i.toString(), `${jsonParsed[i]}`));
+						}
+						break;
 				}
 			}
 		} else {
@@ -257,92 +314,13 @@ export class PerlDebugSession extends LoggingDebugSession {
 		return vs;
 	}
 
-	private parseScalar(lines: string[], i: number): Variable {
-		const tmp = lines[i].split(' = ');
-		return new Variable(tmp[0], tmp[1]);
-	}
-
-	private parseList(lines: string[], i: number): Variable {
-		const name = lines[i].split(' = ')[0];
-		const ref = this.currentVarRef;
-		const v = new Variable(name, '', ref);
-
-		// parse child variables
+	private parseHashChilds(childs: object[]) {
 		let cv: Variable[] = [];
-		let parsed = false;
-		for (let j = i + 1; parsed === false; j++) {
-			const line = lines[j].trim();
-
-			if (line === ')') {
-				parsed = true;
-			} else {
-				// add new variables to list
-				const tmp = line.split(' ');
-				let newVar: Variable;
-				switch (tmp[0].charAt(0)) {
-					case '@':
-						newVar = this.parseList(lines, j);
-						break;
-					case '%':
-						newVar = this.parseHash(lines, j);
-						break;
-					default:
-						newVar = new Variable(tmp[0], tmp[2]);
-						break;
-				}
-				cv.push(newVar);
-			}
+		for (let i = 0; i < childs.length; i++) {
+			cv.push(new Variable(i.toString(), `${childs[i]}`));
 		}
-
-		this.varsMap.set(ref, cv);
-
+		this.varsMap.set(this.currentVarRef, cv);
 		this.currentVarRef--;
-
-		return v;
-	}
-
-	private parseHash(lines: string[], i: number): Variable {
-		const name = lines[i].split(' = ')[0];
-		const ref = this.currentVarRef;
-		const v = new Variable(name, '', ref);
-
-		// parse child variables
-		let cv: Variable[] = [];
-		let parsed = false;
-		for (let j = i + 1; parsed === false; j++) {
-			const line = lines[j].trim();
-
-			if (line === ')') {
-				parsed = true;
-			}
-			else if (line === 'empty hash') {
-				parsed = true;
-				v.value = 'empty hash';
-			}
-			else {
-				// add new variables to list
-				const tmp = line.split(' => ');
-				let newVar: Variable;
-				switch (tmp[0].charAt(0)) {
-					case '@':
-						newVar = this.parseList(lines, j);
-						break;
-					case '%':
-						newVar = this.parseHash(lines, j);
-						break;
-					default:
-						newVar = new Variable(tmp[0], tmp[1]);
-						break;
-				}
-				cv.push(newVar);
-			}
-		}
-
-		this.varsMap.set(ref, cv);
-
-		this.currentVarRef--;
-
-		return v;
 	}
 
 	protected setVariableRequest(response: DebugProtocol.SetVariableResponse, args: DebugProtocol.SetVariableArguments): void {
