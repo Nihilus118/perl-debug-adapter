@@ -273,7 +273,21 @@ export class PerlDebugSession extends LoggingDebugSession {
 					case '$':
 						output = await this._runtime.request(`print STDERR (defined ${v} ? ${v} : 'undef')`);
 						if (output[1].includes('HASH')) {
-							output = await this._runtime.request(`x ${v}`);
+							const seperator = randomUUID();
+							const keys = (await this._runtime.request(`print STDERR join('${seperator}', keys %${v})`))[1].split(seperator);
+							// parent variable
+							vs.push(new Variable(v, `( ${keys.join(', ')} )`, this.currentVarRef));
+							// child variables
+							cv = [];
+							for (let i = 0; i < keys.length; i++) {
+								const key = keys[i];
+								const command = `print STDERR encode_json(${v}->{'${key}'})`;
+								// TODO: Check if nested and make this part recursive like hashes
+								output = await this._runtime.request(command);
+								cv.push(new Variable(key, output[1]));
+							}
+							this.varsMap.set(this.currentVarRef, cv);
+							this.currentVarRef--;
 							break;
 						}
 						else {
