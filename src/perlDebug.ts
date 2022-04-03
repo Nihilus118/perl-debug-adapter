@@ -5,10 +5,8 @@ import {
 } from '@vscode/debugadapter';
 import { DebugProtocol } from '@vscode/debugprotocol';
 import { Subject } from 'await-notify';
-import { randomUUID } from 'crypto';
+import { dirname, join } from 'path';
 import { PerlRuntimeWrapper } from './perlRuntimeWrapper';
-import path = require('path');
-
 
 export interface ILaunchRequestArguments extends DebugProtocol.LaunchRequestArguments {
 	program: string;
@@ -121,12 +119,13 @@ export class PerlDebugSession extends LoggingDebugSession {
 
 	protected async launchRequest(response: DebugProtocol.LaunchResponse, args: ILaunchRequestArguments) {
 
-		// clear parsed variables
+		// clear parsed variables and reset counters
 		this.varsMap.clear();
 		this.currentVarRef = 999;
+		this.currentBreakpointID = 1;
 
 		// set cwd
-		this.cwd = args.cwd || path.dirname(args.program);
+		this.cwd = args.cwd || dirname(args.program);
 
 		// make sure to 'Stop' the buffered logging if 'trace' is not set
 		logger.setup(Logger.LogLevel.Verbose, false);
@@ -191,7 +190,7 @@ export class PerlDebugSession extends LoggingDebugSession {
 				nm = nm.split("'")[0];
 				let file = line.split("'")[1];
 				if (file.includes('./')) {
-					file = path.join(this.cwd, file);
+					file = join(this.cwd, file);
 					file = this._runtime.normalizePathAndCasing(file);
 				}
 				const fn = new Source(file);
@@ -239,7 +238,7 @@ export class PerlDebugSession extends LoggingDebugSession {
 		if (ref >= 1000) {
 			let vars: string[] = [];
 			if (ref % 2 === 0) {
-				vars = (await this._runtime.request('foreach(sort(keys( % { peek_our(2); }), keys( % { peek_my(2); }))) { print STDERR "$_|"; }'))[1].split('|');
+				vars = (await this._runtime.request('foreach(sort(keys( % { peek_our(2); }), keys( % { peek_my(2); }))) { print STDERR "$_|"; }'))[1].split('|').filter(e => { return e !== ''; });
 			}
 			else if (ref % 2 === 1) {
 				vars = [
@@ -248,7 +247,7 @@ export class PerlDebugSession extends LoggingDebugSession {
 					"@F",
 					"%INC",
 					"%ENV",
-					"%SIG",
+					"$SIG",
 					"$ARG",
 					"$NR",
 					"$RS",
@@ -281,56 +280,57 @@ export class PerlDebugSession extends LoggingDebugSession {
 			}
 
 			for (let i = 0; i < vars.length; i++) {
-				const v = vars[i];
-				let output: string[];
-				let cv: Variable[];
-				switch (v.charAt(0)) {
-					case '$':
-						output = await this._runtime.request(`print STDERR (defined ${v} ? ${v} : 'undef')`);
-						if (output[1].includes('HASH')) {
-							const seperator = randomUUID();
-							const keys = (await this._runtime.request(`print STDERR join('${seperator}', keys %${v})`))[1].split(seperator);
-							// parent variable
-							vs.push(new Variable(v, `( ${keys.join(', ')} )`, this.currentVarRef));
-							// child variables
-							cv = [];
-							for (let i = 0; i < keys.length; i++) {
-								const key = keys[i];
-								const command = `print STDERR encode_json(${v}->{'${key}'})`;
-								// TODO: Check if nested and make this part recursive like hashes
-								output = await this._runtime.request(command);
-								cv.push(new Variable(key, output[1]));
-							}
-							this.varsMap.set(this.currentVarRef, cv);
-							this.currentVarRef--;
-							break;
-						}
-						else {
-							vs.push(new Variable(v, output[1]));
-						}
-						break;
-					case '@':
-						const seperator = randomUUID();
-						output = (await this._runtime.request(`print STDERR (${v} > 0 ? join('${seperator}', ${v}) : '${seperator}')`))[1].split(seperator).filter(e => { return e !== ''; });;
+				let v = vars[i];
+				let command = `print STDERR (split (/\\(/, \\${v}))[0]`;
+				const perlType = (await this._runtime.request(command))[1];
+				if (perlType === 'REF') {
+					// add % sign
+					v = `{%${v}}`;
+				}
+				if (perlType === 'ARRAY' || perlType === 'HASH') {
+					// add % sign
+					v = `\\${v}`;
+				}
+
+				// get variable values as json string
+				command = `print STDERR JSON->new()->allow_blessed(1)->convert_blessed(1)->encode(${v})`;
+				const json = (await this._runtime.request(command))[1];
+
+				switch (perlType) {
+					case 'REF':
 						// parent variable
-						vs.push(new Variable(v, `( ${output.join(', ')} )`, this.currentVarRef));
+						vs.push(new Variable(vars[i], json, this.currentVarRef));
 						// child variables
-						cv = [];
-						for (let i = 0; i < output.length; i++) {
-							cv.push(new Variable(i.toString(), output[i]));
+						this.parseVariableChilds(JSON.parse(json));
+						break;
+					case 'HASH':
+						// parent variable
+						vs.push(new Variable(vars[i], json, this.currentVarRef));
+						// child variables
+						this.parseVariableChilds(JSON.parse(json));
+						break;
+					case 'ARRAY':
+						// parent variable
+						const childVars: Array<any> = JSON.parse(json);
+						vs.push(new Variable(vars[i], `(${childVars.join(', ')})`, this.currentVarRef));
+						// child variables
+						let cv: Variable[] = [];
+						for (let child in childVars) {
+							let value: string;
+							// add quotes to strings
+							if (isNaN(childVars[child])) {
+								value = `"${childVars[child]}"`;
+							} else {
+								value = `${childVars[child]}`;
+							}
+							cv.push(new Variable(child, value));
 						}
 						this.varsMap.set(this.currentVarRef, cv);
 						this.currentVarRef--;
 						break;
-					case '%':
-						// parent variable
-						const json = (await this._runtime.request(`print STDERR (defined \\${v} ? encode_json(\\${v}) : '{}')`))[1];
-						vs.push(new Variable(v, json, this.currentVarRef));
-						if (json.startsWith('{') && json.endsWith('}')) {
-							// child variables
-							const jsonParsed: object[] = JSON.parse(json);
-							this.parseHashChilds(jsonParsed);
-						}
+					default:
+						// SCALAR
+						vs.push(new Variable(vars[i], `${json}`));
 						break;
 				}
 			}
@@ -346,17 +346,26 @@ export class PerlDebugSession extends LoggingDebugSession {
 		return vs;
 	}
 
-	private parseHashChilds(childs: object) {
+	private parseVariableChilds(childs: object) {
 		let cv: Variable[] = [];
 		const ref = this.currentVarRef;
 		this.currentVarRef--;
 		for (let child in childs) {
 			if (this.isObject(childs[child])) {
+				// we have found a new parent
 				cv.push(new Variable(`${child}`, `${JSON.stringify(childs[child])}`, this.currentVarRef));
 				// call this function recursivly to also parse the childs of a child
-				this.parseHashChilds(childs[child]);
+				this.parseVariableChilds(childs[child]);
 			} else {
-				cv.push(new Variable(`${child}`, `${childs[child]}`));
+				// add child to the list of new childs
+				let value: string;
+				// add quotes to strings
+				if (isNaN(childs[child])) {
+					value = `"${childs[child]}"`;
+				} else {
+					value = `${childs[child]}`;
+				}
+				cv.push(new Variable(`${child}`, `${value}`));
 			}
 		}
 		this.varsMap.set(ref, cv);
