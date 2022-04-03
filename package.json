@@ -44,14 +44,15 @@
     "@typescript-eslint/parser": "^5.12.0",
     "@vscode/debugadapter": "^1.55.0-pre.1",
     "@vscode/debugadapter-testsupport": "^1.55.0-pre.1",
-    "await-notify": "^1.0.1",
     "esbuild": "^0.14.21",
     "eslint": "^8.9.0",
     "typescript": "^4.5.5",
     "vsce": "^2.6.7"
   },
+  "dependencies": {
+    "await-notify": "^1.0.1"
+  },
   "main": "./dist/extension.js",
-  "browser": "./dist/web-extension.js",
   "activationEvents": [
     "onDebugResolve:perl",
     "onDebugDynamicConfigurations:perl"
