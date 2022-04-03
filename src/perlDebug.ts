@@ -7,6 +7,7 @@ import { DebugProtocol } from '@vscode/debugprotocol';
 import { Subject } from 'await-notify';
 import { randomUUID } from 'crypto';
 import { PerlRuntimeWrapper } from './perlRuntimeWrapper';
+import path = require('path');
 
 
 export interface ILaunchRequestArguments extends DebugProtocol.LaunchRequestArguments {
@@ -14,12 +15,13 @@ export interface ILaunchRequestArguments extends DebugProtocol.LaunchRequestArgu
 	debug: boolean;
 	stopOnEntry: boolean;
 	perlExecutable?: string;
-	args?: string[];
 	cwd?: string;
+	args?: string[];
 	env?: object[];
 }
 
 export interface IBreakpointData {
+	file: string,
 	line: number,
 	id: number;
 }
@@ -36,6 +38,7 @@ export class PerlDebugSession extends LoggingDebugSession {
 	private _variableHandles = new Handles<'locals' | 'globals'>();
 	private varsMap = new Map<number, Variable[]>();
 	private bps: IBreakpointData[] = [];
+	private cwd: string = "";
 
 	public constructor() {
 		super("perl-debug.txt");
@@ -55,7 +58,8 @@ export class PerlDebugSession extends LoggingDebugSession {
 		this._runtime.on('stopOnBreakpoint', () => {
 			this.sendEvent(new StoppedEvent('breakpoint', PerlDebugSession.threadId));
 		});
-		this._runtime.on('stopOnException', (exception) => {
+		// TODO: Make wrapper send this event if an exception occurs
+		this._runtime.on('stopOnException', (exception: string) => {
 			this.sendEvent(new StoppedEvent(`exception(${exception})`, PerlDebugSession.threadId));
 			this.sendEvent(
 				new StoppedEvent("postfork", PerlDebugSession.threadId)
@@ -63,6 +67,9 @@ export class PerlDebugSession extends LoggingDebugSession {
 		});
 		this._runtime.on('breakpointValidated', (bp: [boolean, number, number]) => {
 			this.sendEvent(new BreakpointEvent('changed', { verified: bp[0], line: bp[1], id: bp[2] } as DebugProtocol.Breakpoint));
+		});
+		this._runtime.on('breakpointDeleted', (bpId: number) => {
+			this.sendEvent(new BreakpointEvent('removed', { id: bpId } as DebugProtocol.Breakpoint));
 		});
 		this._runtime.on('output', (text: string) => {
 			this.sendEvent(new OutputEvent(`${text}`));
@@ -118,6 +125,9 @@ export class PerlDebugSession extends LoggingDebugSession {
 		this.varsMap.clear();
 		this.currentVarRef = 999;
 
+		// set cwd
+		this.cwd = args.cwd || path.dirname(args.program);
+
 		// make sure to 'Stop' the buffered logging if 'trace' is not set
 		logger.setup(Logger.LogLevel.Verbose, false);
 
@@ -130,22 +140,22 @@ export class PerlDebugSession extends LoggingDebugSession {
 			args.program,
 			!!args.stopOnEntry,
 			args.debug, args.args || [],
-			this.bps
+			this.bps,
+			this.cwd
 		);
 		this.sendResponse(response);
 	}
 
 	protected async setBreakPointsRequest(response: DebugProtocol.SetBreakpointsResponse, args: DebugProtocol.SetBreakpointsArguments): Promise<void> {
-		// save breakpoints in memory
-		const clientLines = args.lines || [];
+		// save breakpoints in memory and hand them over in the launch request later
+		const clientLines = args.lines!;
 
-		// set breakpoints inside the debugger
 		let bps: Breakpoint[] = [];
 		this.currentBreakpointID = 1;
 		for (let i = 0; i < clientLines.length; i++) {
-			const bp = new Breakpoint(false, clientLines[i]);
+			const bp = new Breakpoint(false, clientLines[i], undefined, args.source as Source);
 			bp.setId(this.currentBreakpointID);
-			this.bps.push({ id: this.currentBreakpointID, line: clientLines[i] } as IBreakpointData);
+			this.bps.push({ id: this.currentBreakpointID, line: clientLines[i], file: args.source.path as String } as IBreakpointData);
 			bps.push(bp);
 			this.currentBreakpointID++;
 		}
@@ -179,7 +189,12 @@ export class PerlDebugSession extends LoggingDebugSession {
 				// TODO: More detailed parsing of stack frames
 				let nm = line.split(' = ')[1];
 				nm = nm.split("'")[0];
-				const fn = new Source(line.split("'")[1]);
+				let file = line.split("'")[1];
+				if (file.includes('./')) {
+					file = path.join(this.cwd, file);
+					file = this._runtime.normalizePathAndCasing(file);
+				}
+				const fn = new Source(file);
 				const ln = line.split('line ')[1];
 				stackFrames.push(new StackFrame(count, nm, fn, +ln));
 				count++;

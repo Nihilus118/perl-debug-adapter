@@ -6,6 +6,7 @@ import { ChildProcess, spawn, SpawnOptions } from 'child_process';
 import { EventEmitter } from 'events';
 import { IBreakpointData } from './perlDebug';
 import { StreamCatcher } from './streamCatcher';
+import path = require('path');
 
 export interface IRuntimeBreakpoint {
 	line: number;
@@ -17,12 +18,8 @@ export class PerlRuntimeWrapper extends EventEmitter {
 	private _session!: ChildProcess;
 	// helper to run commands and parse output
 	private streamCatcher: StreamCatcher;
-
-	// maps from sourceFile to array of IRuntimeBreakpoint
-	private _breakPoints = new Map<string, IRuntimeBreakpoint[]>();
-	public get breakPoints() {
-		return this._breakPoints;
-	}
+	// max tries to set a breakpoint
+	private maxBreakpointTries: number = 10;
 
 	constructor() {
 		super();
@@ -34,11 +31,12 @@ export class PerlRuntimeWrapper extends EventEmitter {
 	}
 
 	// Start executing the given program.
-	public async start(perlExecutable: string, program: string, stopOnEntry: boolean, debug: boolean, args: string[], bps: IBreakpointData[]): Promise<void> {
+	public async start(perlExecutable: string, program: string, stopOnEntry: boolean, debug: boolean, args: string[], bps: IBreakpointData[], argCWD: string): Promise<void> {
 		// Spawn perl process and handle errors
+		argCWD = this.normalizePathAndCasing(argCWD);
 		const spawnOptions: SpawnOptions = {
 			detached: true,
-			cwd: undefined,
+			cwd: argCWD,
 			env: {
 				TERM: 'dumb',
 				...process.env,
@@ -73,9 +71,9 @@ export class PerlRuntimeWrapper extends EventEmitter {
 			this._session.stderr!
 		);
 
-
+		// Does the user want to debug the script or just run it?
 		if (debug) {
-			// use PadWalker to access variables in scope
+			// use PadWalker to access variables in scope and JSON the send data to perlDebug.ts
 			const lines = await this.request('use PadWalker qw/peek_our peek_my/; use JSON; use Data::Dumper;');
 			if (lines.join().includes('Can\'t locate')) {
 				this.emit('output', `Couldn't start the Debugger! Modules JSON, Data::Dumper and PadWalker are required to run this debugger. Please install them and try again.`);
@@ -83,18 +81,30 @@ export class PerlRuntimeWrapper extends EventEmitter {
 			}
 			// set breakpoints
 			for (let i = 0; i < bps.length; i++) {
-				const bp = bps[i];
-				let line = bp.line;
-				let success = false;
-				while (success === false) {
-					const data = (await this.request(`b ${line}`)).join("");
-					if (data.includes('not breakable')) {
-						// try again at the next line
-						line++;
-					} else {
-						// a breakable line was found and the breakpoint set
-						this.emit('breakpointValidated', [true, line, bp.id]);
-						success = true;
+				const id = bps[i].id;
+				if (this.normalizePathAndCasing(program) !== this.normalizePathAndCasing(bps[i].file)) {
+					// perl5db can not set breakpoints outside of the main file so we delete them
+					this.emit('breakpointDeleted', id);
+				} else {
+					// now try to set the breakpoint
+					let line = bps[i].line;
+					let success = false;
+					for (let tries = 0; success === false; tries++) {
+						if (tries > this.maxBreakpointTries) {
+							// perl5db could not set the breakpoint
+							this.emit('breakpointDeleted', id);
+							break;
+						}
+						// try to set the breakpoint
+						const data = (await this.request(`b ${line}`)).join("");
+						if (data.includes('not breakable')) {
+							// try again at the next line
+							line++;
+						} else {
+							// a breakable line was found and the breakpoint set
+							this.emit('breakpointValidated', [true, line, id]);
+							success = true;
+						}
 					}
 				}
 			}
@@ -104,6 +114,7 @@ export class PerlRuntimeWrapper extends EventEmitter {
 				await this.continue();
 			}
 		} else {
+			// Just run
 			await this.continue();
 		}
 	}
