@@ -6,7 +6,6 @@ import { ChildProcess, spawn, SpawnOptions } from 'child_process';
 import { EventEmitter } from 'events';
 import { IBreakpointData } from './perlDebug';
 import { StreamCatcher } from './streamCatcher';
-import path = require('path');
 
 export interface IRuntimeBreakpoint {
 	line: number;
