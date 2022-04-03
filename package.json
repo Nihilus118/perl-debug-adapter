@@ -95,6 +95,11 @@
                 "description": "Enable or disable debugging.",
                 "default": true
               },
+              "cwd": {
+                "type": "string",
+                "description": "Set the current working directory for the perl process.",
+                "default": "${workspaceFolder}"
+              },
               "perlExecutable": {
                 "type": "string",
                 "description": "Path to perl executable."
