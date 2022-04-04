@@ -40,6 +40,7 @@ export class PerlRuntimeWrapper extends EventEmitter {
 			detached: true,
 			cwd: argCWD,
 			env: {
+				// eslint-disable-next-line @typescript-eslint/naming-convention
 				TERM: 'dumb',
 				...process.env,
 			},
