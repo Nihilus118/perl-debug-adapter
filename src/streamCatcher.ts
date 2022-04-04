@@ -1,10 +1,11 @@
-import { Writable, Readable } from 'stream';
 import { EventEmitter } from 'events';
-import { logger } from '@vscode/debugadapter';
+import { Readable, Writable } from 'stream';
 
 const colors = /\u001b\[([0-9]+)m|\u001b/g;
 
 const db = /^(\[(pid=)?[0-9\->]+\])?(\[\d+\])?DB\<+([0-9]+)\>+$/;
+
+const ansiSeq = /[\u001b\u009b][[()#;?]*(?:[0-9]{1,4}(?:;[0-9]{0,4})*)?[0-9A-ORZcf-nqry=><]/g;
 
 function cleanLine(line: string) {
     return line.replace(colors, '').replace(/\s|(\\b)/g, '').replace('\b', '');
@@ -46,7 +47,8 @@ export class StreamCatcher extends EventEmitter {
 
         let lastBuffer = '';
         output.on('data', (buffer) => {
-            const data = lastBuffer + buffer.toString().replace(/[\u001b\u009b][[()#;?]*(?:[0-9]{1,4}(?:;[0-9]{0,4})*)?[0-9A-ORZcf-nqry=><]/g, '');
+            // remove ansi sequences from buffer to ensure consistent parsing
+            const data = lastBuffer + buffer.toString().replace(ansiSeq, '');
             const lines = data.split(/\r?\n/);
             const lastLine = lines[lines.length - 1];
 

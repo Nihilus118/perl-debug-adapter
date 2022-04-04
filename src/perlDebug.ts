@@ -4,9 +4,8 @@ import {
 } from '@vscode/debugadapter';
 import { DebugProtocol } from '@vscode/debugprotocol';
 import { Subject } from 'await-notify';
-import { dirname, join } from 'path';
+import { dirname, join, basename } from 'path';
 import { PerlRuntimeWrapper } from './perlRuntimeWrapper';
-import { basename } from 'path';
 
 export interface ILaunchRequestArguments extends DebugProtocol.LaunchRequestArguments {
 	program: string;
@@ -127,8 +126,8 @@ export class PerlDebugSession extends LoggingDebugSession {
 		// set cwd
 		this.cwd = args.cwd || dirname(args.program);
 
-		// make sure to 'Stop' the buffered logging if 'trace' is not set
-		logger.setup(Logger.LogLevel.Log, false);
+		// setup logger
+		logger.setup(Logger.LogLevel.Warn, false);
 
 		// wait 1 second until configuration has finished (and configurationDoneRequest has been called)
 		await this._configurationDone.wait(1000);
@@ -300,42 +299,49 @@ export class PerlDebugSession extends LoggingDebugSession {
 				const json = (await this._runtime.request(command))[1];
 				logger.log(`${v} value: ${json}`);
 
-				switch (perlType) {
-					case 'REF':
-						// parent variable
-						vs.push(new Variable(vars[i], json, this.currentVarRef));
-						// child variables
-						this.parseVariableChilds(JSON.parse(json));
-						break;
-					case 'HASH':
-						// parent variable
-						vs.push(new Variable(vars[i], json, this.currentVarRef));
-						// child variables
-						this.parseVariableChilds(JSON.parse(json));
-						break;
-					case 'ARRAY':
-						// parent variable
-						const childVars: Array<any> = JSON.parse(json);
-						vs.push(new Variable(vars[i], `(${childVars.join(', ')})`, this.currentVarRef));
-						// child variables
-						let cv: Variable[] = [];
-						for (let child in childVars) {
-							let value: string;
-							// add quotes to strings
-							if (isNaN(childVars[child])) {
-								value = `"${childVars[child]}"`;
-							} else {
-								value = `${childVars[child]}`;
+				try {
+					const parsed = JSON.parse(json);
+					switch (perlType) {
+						case 'REF':
+							// parent variable
+							vs.push(new Variable(vars[i], json, this.currentVarRef));
+							// child variables
+							this.parseVariableChilds(parsed);
+							break;
+						case 'HASH':
+							// parent variable
+							vs.push(new Variable(vars[i], json, this.currentVarRef));
+							// child variables
+							this.parseVariableChilds(parsed);
+							break;
+						case 'ARRAY':
+							// parent variable
+							const childVars: Array<any> = parsed;
+							vs.push(new Variable(vars[i], `(${childVars.join(', ')})`, this.currentVarRef));
+							// child variables
+							let cv: Variable[] = [];
+							for (let child in childVars) {
+								let value: string;
+								// add quotes to strings
+								if (isNaN(childVars[child])) {
+									value = `"${childVars[child]}"`;
+								} else {
+									value = `${childVars[child]}`;
+								}
+								cv.push(new Variable(child, value));
 							}
-							cv.push(new Variable(child, value));
-						}
-						this.varsMap.set(this.currentVarRef, cv);
-						this.currentVarRef--;
-						break;
-					default:
-						// SCALAR
-						vs.push(new Variable(vars[i], `${json}`));
-						break;
+							this.varsMap.set(this.currentVarRef, cv);
+							this.currentVarRef--;
+							break;
+						default:
+							// SCALAR
+							vs.push(new Variable(vars[i], `${json}`));
+							break;
+					}
+				}
+				catch {
+					const output = (await this._runtime.request(`print STDERR Dumper(${vars[i]})`));
+					vs.push(new Variable(vars[i], output[1]));
 				}
 			}
 		} else {
