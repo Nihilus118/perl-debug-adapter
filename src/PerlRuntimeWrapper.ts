@@ -26,7 +26,7 @@ export class PerlRuntimeWrapper extends EventEmitter {
 		this.streamCatcher = new StreamCatcher();
 	}
 
-	destry() {
+	destroy() {
 		this._session.kill();
 	}
 
@@ -82,6 +82,7 @@ export class PerlRuntimeWrapper extends EventEmitter {
 			return;
 		});
 
+		// send the script output to the debug console
 		this._session.stdout!.on('data', (data) => {
 			this.emit('output', data.toString());
 		});
@@ -94,7 +95,7 @@ export class PerlRuntimeWrapper extends EventEmitter {
 		// launch was successfull so we can close the error listener
 		this._session.stderr!.removeListener('data', errorListerner);
 
-		// Does the user want to debug the script or just run it?
+		// does the user want to debug the script or just run it?
 		if (debug) {
 			logger.log('Starting Debug');
 			// use PadWalker to access variables in scope and JSON the send data to perlDebug.ts
@@ -145,12 +146,11 @@ export class PerlRuntimeWrapper extends EventEmitter {
 	}
 
 	async request(command: string): Promise<string[]> {
-		// logger.log(`Command: ${command}`);
+		logger.log(`Command: ${command}`);
 		return (await this.streamCatcher.request(command)).filter(function (e) { return e; });
 	}
 
 	public async continue() {
-		logger.log('continue');
 		const lines = await this.request('c');
 		const text = lines.join();
 		if (text.includes('Debugged program terminated.')) {
@@ -166,14 +166,12 @@ export class PerlRuntimeWrapper extends EventEmitter {
 	}
 
 	public async getBreakpoints() {
-		logger.log('getBreakpoints');
 		const lines = await this.request("L b");
 		// TODO: Parse breakpoints
 		return lines;
 	}
 
 	public async step(signal: string = 'stopOnStep') {
-		logger.log('step');
 		const lines = await this.request('n');
 		const end = lines.join().includes('Debugged program terminated.');
 		if (end) {
@@ -183,7 +181,6 @@ export class PerlRuntimeWrapper extends EventEmitter {
 	}
 
 	public async stepIn() {
-		logger.log('stepIn');
 		const lines = await this.request('s');
 		const end = lines.join().includes('Debugged program terminated.');
 		if (end) {
@@ -193,7 +190,6 @@ export class PerlRuntimeWrapper extends EventEmitter {
 	}
 
 	public async stepOut() {
-		logger.log('stepOut');
 		const lines = await this.request('r');
 		const end = lines.join().includes('Debugged program terminated.');
 		if (end) {
