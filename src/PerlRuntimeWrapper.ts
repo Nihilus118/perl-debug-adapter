@@ -75,7 +75,7 @@ export class PerlRuntimeWrapper extends EventEmitter {
 		};
 		this._session.stderr!.on('data', errorListerner);
 
-		this._session.on('close', code => {
+		this._session.on('exit', code => {
 			// print the error if we can not start the debugger
 			logger.error(`Could not start the debugging session! Code: ${code}\n${output}`);
 			this.emit('end');
@@ -107,29 +107,20 @@ export class PerlRuntimeWrapper extends EventEmitter {
 			// set breakpoints
 			for (let i = 0; i < bps.length; i++) {
 				const id = bps[i].id;
-				if (this.normalizePathAndCasing(program) !== this.normalizePathAndCasing(bps[i].file)) {
-					// perl5db can not set breakpoints outside of the main file so we delete them
-					this.emit('breakpointDeleted', id);
-				} else {
-					// now try to set the breakpoint
-					let line = bps[i].line;
-					let success = false;
-					for (let tries = 0; success === false; tries++) {
-						if (tries > this.maxBreakpointTries) {
-							// perl5db could not set the breakpoint
-							this.emit('breakpointDeleted', id);
-							break;
-						}
-						// try to set the breakpoint
-						const data = (await this.request(`b ${line}`)).join("");
-						if (data.includes('not breakable')) {
-							// try again at the next line
-							line++;
-						} else {
-							// a breakable line was found and the breakpoint set
-							this.emit('breakpointValidated', [true, line, id]);
-							success = true;
-						}
+				const file = this.normalizePathAndCasing(bps[i].file);
+				let line = bps[i].line;
+				let success = false;
+				// try to set the breakpoint
+				for (let tries = 0; success === false && tries < this.maxBreakpointTries; tries++) {
+					// try to set the breakpoint
+					const data = (await this.request(`b ${file}:${line}`)).join("");
+					if (data.includes('not breakable')) {
+						// try again at the next line
+						line++;
+					} else {
+						// a breakable line was found and the breakpoint set
+						this.emit('breakpointValidated', [id, line]);
+						success = true;
 					}
 				}
 			}
@@ -147,7 +138,7 @@ export class PerlRuntimeWrapper extends EventEmitter {
 
 	async request(command: string): Promise<string[]> {
 		logger.log(`Command: ${command}`);
-		return (await this.streamCatcher.request(command)).filter(function (e) { return e; });
+		return (await this.streamCatcher.request(command)).filter(e => { return e !== ''; });
 	}
 
 	public async getBreakpoints() {

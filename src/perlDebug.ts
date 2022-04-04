@@ -55,8 +55,8 @@ export class PerlDebugSession extends LoggingDebugSession {
 		this._runtime.on('stopOnBreakpoint', () => {
 			this.sendEvent(new StoppedEvent('breakpoint', PerlDebugSession.threadId));
 		});
-		this._runtime.on('breakpointValidated', (bp: [boolean, number, number]) => {
-			this.sendEvent(new BreakpointEvent('changed', { verified: bp[0], line: bp[1], id: bp[2] } as DebugProtocol.Breakpoint));
+		this._runtime.on('breakpointValidated', (bp: [number, number]) => {
+			this.sendEvent(new BreakpointEvent('changed', { verified: true, id: bp[0], line: bp[1] } as DebugProtocol.Breakpoint));
 		});
 		this._runtime.on('breakpointDeleted', (bpId: number) => {
 			this.sendEvent(new BreakpointEvent('removed', { id: bpId } as DebugProtocol.Breakpoint));
@@ -231,7 +231,7 @@ export class PerlDebugSession extends LoggingDebugSession {
 		if (ref >= 1000) {
 			let vars: string[] = [];
 			if (ref % 2 === 0) {
-				vars = (await this._runtime.request('foreach(sort(keys( % { peek_our(2); }), keys( % { peek_my(2); }))) { print STDERR "$_|"; }'))[1].split('|').filter(e => { return e !== ''; });
+				vars = (await this._runtime.request(`print STDERR join ('|', sort(keys( % { peek_our(2); }), keys( % { peek_my(2); })))`))[1].split('|');
 				logger.log(`Varnames: ${vars.join(', ')}`);
 			}
 			else if (ref % 2 === 1) {

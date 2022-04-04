@@ -68,7 +68,7 @@ export class StreamCatcher extends EventEmitter {
         line = line.trim();
         this.buffer.push(line);
         if (lastCommandLine.test(line)) {
-            const data = this.buffer.filter(e => { return e !== ''; });
+            const data = this.buffer;
             this.buffer = [];
             this.resolveRequest(data);
         }
