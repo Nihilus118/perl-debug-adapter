@@ -150,52 +150,44 @@ export class PerlRuntimeWrapper extends EventEmitter {
 		return (await this.streamCatcher.request(command)).filter(function (e) { return e; });
 	}
 
-	public async continue() {
-		const lines = await this.request('c');
-		const text = lines.join();
-		if (text.includes('Debugged program terminated.')) {
-			if (text.includes('Died')) {
-				this.emit('output', lines.find(e => {
-					return e.includes('Died');
-				}) as string);
-			}
-			this.emit('end');
-		} else {
-			this.emit('stopOnBreakpoint');
-		}
-	}
-
 	public async getBreakpoints() {
 		const lines = await this.request("L b");
 		// TODO: Parse breakpoints
 		return lines;
 	}
 
-	public async step(signal: string = 'stopOnStep') {
-		const lines = await this.request('n');
-		const end = lines.join().includes('Debugged program terminated.');
-		if (end) {
+	private isEnd(lines: string[], event: string): boolean {
+		const text = lines.join();
+
+		if (text.includes('Debugged program terminated.')) {
+			// did the script die?
+			const index = lines.findIndex(e => {
+				return e.includes('Debugged program terminated.');
+			});
+			lines = lines.slice(1, index);
+			this.emit('output', lines.join('\n'));
 			this.emit('end');
+			return true;
 		}
-		this.emit(signal);
+
+		this.emit(event);
+		return false;
+	}
+
+	public async continue() {
+		this.isEnd(await this.request('c'), 'stopOnBreakpoint');
+	}
+
+	public async step(signal: string = 'stopOnStep') {
+		this.isEnd(await this.request('n'), signal);
 	}
 
 	public async stepIn() {
-		const lines = await this.request('s');
-		const end = lines.join().includes('Debugged program terminated.');
-		if (end) {
-			this.emit('end');
-		}
-		this.emit('stopOnStep');
+		this.isEnd(await this.request('s'), 'stopOnStep');
 	}
 
 	public async stepOut() {
-		const lines = await this.request('r');
-		const end = lines.join().includes('Debugged program terminated.');
-		if (end) {
-			this.emit('end');
-		}
-		this.emit('stopOnStep');
+		this.isEnd(await this.request('r'), 'stopOnStep');
 	}
 
 

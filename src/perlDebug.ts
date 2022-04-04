@@ -55,13 +55,6 @@ export class PerlDebugSession extends LoggingDebugSession {
 		this._runtime.on('stopOnBreakpoint', () => {
 			this.sendEvent(new StoppedEvent('breakpoint', PerlDebugSession.threadId));
 		});
-		// TODO: Make wrapper send this event if an exception occurs
-		this._runtime.on('stopOnException', (exception: string) => {
-			this.sendEvent(new StoppedEvent(`exception(${exception})`, PerlDebugSession.threadId));
-			this.sendEvent(
-				new StoppedEvent("postfork", PerlDebugSession.threadId)
-			);
-		});
 		this._runtime.on('breakpointValidated', (bp: [boolean, number, number]) => {
 			this.sendEvent(new BreakpointEvent('changed', { verified: bp[0], line: bp[1], id: bp[2] } as DebugProtocol.Breakpoint));
 		});
