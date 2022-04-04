@@ -2,6 +2,7 @@
  * Copyright (C) Microsoft Corporation. All rights reserved.
  *--------------------------------------------------------*/
 
+import { logger } from '@vscode/debugadapter';
 import { ChildProcess, spawn, SpawnOptions } from 'child_process';
 import { EventEmitter } from 'events';
 import { IBreakpointData } from './perlDebug';
@@ -33,6 +34,8 @@ export class PerlRuntimeWrapper extends EventEmitter {
 	public async start(perlExecutable: string, program: string, stopOnEntry: boolean, debug: boolean, args: string[], bps: IBreakpointData[], argCWD: string): Promise<void> {
 		// Spawn perl process and handle errors
 		argCWD = this.normalizePathAndCasing(argCWD);
+		logger.log(`CWD: ${argCWD}`);
+		logger.log(`ENV: ${JSON.stringify(process.env)}`);
 		const spawnOptions: SpawnOptions = {
 			detached: true,
 			cwd: argCWD,
@@ -43,12 +46,14 @@ export class PerlRuntimeWrapper extends EventEmitter {
 		};
 
 		program = this.normalizePathAndCasing(program);
+		logger.log(`Script: ${program}`);
 		const commandArgs = [
 			'-d',
 			program,
 			...args
 		];
 
+		logger.log(`Perl executable: ${perlExecutable}`);
 		this._session = spawn(
 			perlExecutable,
 			commandArgs,
@@ -56,6 +61,7 @@ export class PerlRuntimeWrapper extends EventEmitter {
 		);
 
 		this._session.on('error', err => {
+			logger.error(`Couldn't start the Debugger! ${err.name} : ${err.message}`);
 			this.emit('output', `Couldn't start the Debugger! ${err.name} : ${err.message}`);
 			this.emit('end');
 			return;
@@ -72,6 +78,7 @@ export class PerlRuntimeWrapper extends EventEmitter {
 
 		// Does the user want to debug the script or just run it?
 		if (debug) {
+			logger.log('Starting Debug');
 			// use PadWalker to access variables in scope and JSON the send data to perlDebug.ts
 			const lines = await this.request('use PadWalker qw/peek_our peek_my/; use JSON; use Data::Dumper;');
 			if (lines.join().includes('Can\'t locate')) {
@@ -107,6 +114,7 @@ export class PerlRuntimeWrapper extends EventEmitter {
 					}
 				}
 			}
+			logger.log(`StopOnEntry: ${stopOnEntry}`);
 			if (stopOnEntry) {
 				this.emit('stopOnEntry');
 			} else {
@@ -119,10 +127,12 @@ export class PerlRuntimeWrapper extends EventEmitter {
 	}
 
 	async request(command: string): Promise<string[]> {
+		// logger.log(`Command: ${command}`);
 		return (await this.streamCatcher.request(command)).filter(function (e) { return e; });
 	}
 
 	public async continue() {
+		logger.log('continue');
 		const lines = await this.request('c');
 		const text = lines.join();
 		if (text.includes('Debugged program terminated.')) {
@@ -138,12 +148,14 @@ export class PerlRuntimeWrapper extends EventEmitter {
 	}
 
 	public async getBreakpoints() {
+		logger.log('getBreakpoints');
 		const lines = await this.request("L b");
 		// TODO: Parse breakpoints
 		return lines;
 	}
 
 	public async step(signal: string = 'stopOnStep') {
+		logger.log('step');
 		const lines = await this.request('n');
 		const end = lines.join().includes('Debugged program terminated.');
 		if (end) {
@@ -153,6 +165,7 @@ export class PerlRuntimeWrapper extends EventEmitter {
 	}
 
 	public async stepIn() {
+		logger.log('stepIn');
 		const lines = await this.request('s');
 		const end = lines.join().includes('Debugged program terminated.');
 		if (end) {
@@ -162,6 +175,7 @@ export class PerlRuntimeWrapper extends EventEmitter {
 	}
 
 	public async stepOut() {
+		logger.log('stepOut');
 		const lines = await this.request('r');
 		const end = lines.join().includes('Debugged program terminated.');
 		if (end) {

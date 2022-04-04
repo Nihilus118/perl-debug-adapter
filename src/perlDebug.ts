@@ -1,12 +1,12 @@
 import {
 	Breakpoint,
-	BreakpointEvent, Handles, InitializedEvent, Logger, logger,
-	LoggingDebugSession, OutputEvent, Scope, Source, StackFrame, StoppedEvent, TerminatedEvent, Thread, Variable
+	BreakpointEvent, Handles, InitializedEvent, logger, Logger, LoggingDebugSession, OutputEvent, Scope, Source, StackFrame, StoppedEvent, TerminatedEvent, Thread, Variable
 } from '@vscode/debugadapter';
 import { DebugProtocol } from '@vscode/debugprotocol';
 import { Subject } from 'await-notify';
 import { dirname, join } from 'path';
 import { PerlRuntimeWrapper } from './perlRuntimeWrapper';
+import { basename } from 'path';
 
 export interface ILaunchRequestArguments extends DebugProtocol.LaunchRequestArguments {
 	program: string;
@@ -128,7 +128,7 @@ export class PerlDebugSession extends LoggingDebugSession {
 		this.cwd = args.cwd || dirname(args.program);
 
 		// make sure to 'Stop' the buffered logging if 'trace' is not set
-		logger.setup(Logger.LogLevel.Verbose, false);
+		logger.setup(Logger.LogLevel.Log, false);
 
 		// wait 1 second until configuration has finished (and configurationDoneRequest has been called)
 		await this._configurationDone.wait(1000);
@@ -185,15 +185,14 @@ export class PerlDebugSession extends LoggingDebugSession {
 		for (let i = 0; i < lines.length; i++) {
 			const line = lines[i];
 			if (line.startsWith('@')) {
-				// TODO: More detailed parsing of stack frames
 				let nm = line.split(' = ')[1];
 				nm = nm.split("'")[0];
 				let file = line.split("'")[1];
 				if (file.includes('./')) {
 					file = join(this.cwd, file);
-					file = this._runtime.normalizePathAndCasing(file);
 				}
-				const fn = new Source(file);
+				file = this._runtime.normalizePathAndCasing(file);
+				const fn = new Source(basename(file), file);
 				const ln = line.split('line ')[1];
 				stackFrames.push(new StackFrame(count, nm, fn, +ln));
 				count++;
@@ -224,6 +223,8 @@ export class PerlDebugSession extends LoggingDebugSession {
 			variables: await this.parseVars(args.variablesReference)
 		};
 
+		logger.log(`Variables: ${JSON.stringify(response.body.variables)}`);
+
 		this.sendResponse(response);
 	}
 
@@ -239,6 +240,7 @@ export class PerlDebugSession extends LoggingDebugSession {
 			let vars: string[] = [];
 			if (ref % 2 === 0) {
 				vars = (await this._runtime.request('foreach(sort(keys( % { peek_our(2); }), keys( % { peek_my(2); }))) { print STDERR "$_|"; }'))[1].split('|').filter(e => { return e !== ''; });
+				logger.log(`Varnames: ${vars.join(', ')}`);
 			}
 			else if (ref % 2 === 1) {
 				vars = [
@@ -283,6 +285,7 @@ export class PerlDebugSession extends LoggingDebugSession {
 				let v = vars[i];
 				let command = `print STDERR (split (/\\(/, \\${v}))[0]`;
 				const perlType = (await this._runtime.request(command))[1];
+				logger.log(`Perltype: ${perlType}`);
 				if (perlType === 'REF') {
 					// add % sign
 					v = `{%${v}}`;
@@ -295,6 +298,7 @@ export class PerlDebugSession extends LoggingDebugSession {
 				// get variable values as json string
 				command = `print STDERR JSON->new()->allow_blessed(1)->convert_blessed(1)->encode(${v})`;
 				const json = (await this._runtime.request(command))[1];
+				logger.log(`${v} value: ${json}`);
 
 				switch (perlType) {
 					case 'REF':

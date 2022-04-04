@@ -1,5 +1,6 @@
 import { Writable, Readable } from 'stream';
 import { EventEmitter } from 'events';
+import { logger } from '@vscode/debugadapter';
 
 const colors = /\u001b\[([0-9]+)m|\u001b/g;
 
@@ -45,7 +46,7 @@ export class StreamCatcher extends EventEmitter {
 
         let lastBuffer = '';
         output.on('data', (buffer) => {
-            const data = lastBuffer + buffer.toString();
+            const data = lastBuffer + buffer.toString().replace(/[\u001b\u009b][[()#;?]*(?:[0-9]{1,4}(?:;[0-9]{0,4})*)?[0-9A-ORZcf-nqry=><]/g, '');
             const lines = data.split(/\r?\n/);
             const lastLine = lines[lines.length - 1];
 
