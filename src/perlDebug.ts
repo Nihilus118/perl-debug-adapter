@@ -61,8 +61,8 @@ export class PerlDebugSession extends LoggingDebugSession {
 		this._runtime.on('breakpointDeleted', (bpId: number) => {
 			this.sendEvent(new BreakpointEvent('removed', { id: bpId } as DebugProtocol.Breakpoint));
 		});
-		this._runtime.on('output', (text: string) => {
-			this.sendEvent(new OutputEvent(`${text}`));
+		this._runtime.on('output', (text: string, category: 'console' | 'important' | 'stdout' | 'stderr' | 'telemetry' = 'console') => {
+			this.sendEvent(new OutputEvent(`${text}`, category));
 		});
 		this._runtime.on('end', () => {
 			this.sendEvent(new TerminatedEvent());
@@ -120,7 +120,7 @@ export class PerlDebugSession extends LoggingDebugSession {
 		this.cwd = args.cwd || dirname(args.program);
 
 		// setup logger
-		logger.setup(Logger.LogLevel.Warn, false);
+		logger.setup(Logger.LogLevel.Log, false);
 
 		// wait 1 second until configuration has finished (and configurationDoneRequest has been called)
 		await this._configurationDone.wait(1000);
@@ -288,7 +288,7 @@ export class PerlDebugSession extends LoggingDebugSession {
 				}
 
 				// get variable values as json string
-				command = `print STDERR JSON->new()->allow_blessed(1)->convert_blessed(1)->encode(${v})`;
+				command = `print STDERR JSON->new()->max_depth(512)->allow_nonref(1)->allow_blessed(1)->convert_blessed(1)->encode(${v})`;
 				const json = (await this._runtime.request(command))[1];
 				logger.log(`${v} value: ${json}`);
 

@@ -5,7 +5,7 @@ const colors = /\u001b\[([0-9]+)m|\u001b/g;
 
 const db = /^(\[(pid=)?[0-9\->]+\])?(\[\d+\])?DB\<+([0-9]+)\>+$/;
 
-const ansiSeq = /[\u001b\u009b][[()#;?]*(?:[0-9]{1,4}(?:;[0-9]{0,4})*)?[0-9A-ORZcf-nqry=><]/g;
+export const ansiSeq = /[\u001b\u009b][[()#;?]*(?:[0-9]{1,4}(?:;[0-9]{0,4})*)?[0-9A-ORZcf-nqry=><]/g;
 
 function cleanLine(line: string) {
     return line.replace(colors, '').replace(/\s|(\\b)/g, '').replace('\b', '');

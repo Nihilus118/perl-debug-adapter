@@ -6,7 +6,7 @@ import { logger } from '@vscode/debugadapter';
 import { ChildProcess, spawn, SpawnOptions } from 'child_process';
 import { EventEmitter } from 'events';
 import { IBreakpointData } from './perlDebug';
-import { StreamCatcher } from './streamCatcher';
+import { ansiSeq, StreamCatcher } from './streamCatcher';
 
 export interface IRuntimeBreakpoint {
 	line: number;
@@ -40,9 +40,13 @@ export class PerlRuntimeWrapper extends EventEmitter {
 			detached: true,
 			cwd: argCWD,
 			env: {
-				// eslint-disable-next-line @typescript-eslint/naming-convention
-				TERM: 'dumb',
 				...process.env,
+				// eslint-disable-next-line @typescript-eslint/naming-convention
+				COLUMNS: '80',
+				// eslint-disable-next-line @typescript-eslint/naming-convention
+				LINES: '25',
+				// eslint-disable-next-line @typescript-eslint/naming-convention
+				TERM: 'dumb'
 			},
 		};
 
@@ -84,7 +88,7 @@ export class PerlRuntimeWrapper extends EventEmitter {
 
 		// send the script output to the debug console
 		this._session.stdout!.on('data', (data) => {
-			this.emit('output', data.toString());
+			this.emit('output', data.toString().replace(ansiSeq, ''));
 		});
 
 		await this.streamCatcher.launch(
