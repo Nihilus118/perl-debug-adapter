@@ -90,6 +90,15 @@ export class PerlDebugSession extends LoggingDebugSession {
 		// make VS Code send setVariable request
 		response.body.supportsSetVariable = true;
 
+		// make VS Code send breakpointLocationsRequest request
+		response.body.supportsBreakpointLocationsRequest = true;
+
+		// make VS Code send loadedSourcesRequest request
+		response.body.supportsLoadedSourcesRequest = true;
+
+		// make VS Code send SetFunctionBreakpointsRequest request
+		response.body.supportsFunctionBreakpoints = true;
+
 		this.sendResponse(response);
 
 		// since this debug adapter can accept configuration requests like 'setBreakpoint' at any time,
@@ -130,7 +139,8 @@ export class PerlDebugSession extends LoggingDebugSession {
 			args.perlExecutable || 'perl',
 			args.program,
 			!!args.stopOnEntry,
-			args.debug, args.args || [],
+			args.debug || true,
+			args.args || [],
 			this.bps,
 			this.cwd
 		);
@@ -210,31 +220,18 @@ export class PerlDebugSession extends LoggingDebugSession {
 	}
 
 	protected async variablesRequest(response: DebugProtocol.VariablesResponse, args: DebugProtocol.VariablesArguments, request?: DebugProtocol.Request): Promise<void> {
-
-		response.body = {
-			variables: await this.parseVars(args.variablesReference)
-		};
-
-		logger.log(`Variables: ${JSON.stringify(response.body.variables)}`);
-
-		this.sendResponse(response);
-	}
-
-	private async parseVars(ref: number): Promise<Variable[]> {
-		let vs: Variable[] = [];
-
-		// Get all top level vars
 		// 1000 => my
 		// 1001 => our
 		// 1002 => global
 		// < 1000 => nested vars
-		if (ref >= 1000) {
-			let vars: string[] = [];
-			if (ref % 2 === 0) {
+		let vars: string[] = [];
+		let vs: Variable[] = [];
+		if (args.variablesReference >= 1000) {
+			if (args.variablesReference % 2 === 0) {
 				vars = (await this._runtime.request(`print STDERR join ('|', sort(keys( % { peek_our(2); }), keys( % { peek_my(2); })))`))[1].split('|');
 				logger.log(`Varnames: ${vars.join(', ')}`);
 			}
-			else if (ref % 2 === 1) {
+			else if (args.variablesReference % 2 === 1) {
 				vars = [
 					"@ARGV",
 					"@INC",
@@ -272,76 +269,109 @@ export class PerlDebugSession extends LoggingDebugSession {
 					"$ARGV"
 				];
 			}
-
-			for (let i = 0; i < vars.length; i++) {
-				let v = vars[i];
-				let command = `print STDERR (split (/\\(/, \\${v}))[0]`;
-				const perlType = (await this._runtime.request(command))[1];
-				logger.log(`Perltype: ${perlType}`);
-				if (perlType === 'REF') {
-					// add % sign
-					v = `{%${v}}`;
-				}
-				if (perlType === 'ARRAY' || perlType === 'HASH') {
-					// add % sign
-					v = `\\${v}`;
-				}
-
-				// get variable values as json string
-				command = `print STDERR JSON->new()->max_depth(512)->allow_nonref(1)->allow_blessed(1)->convert_blessed(1)->encode(${v})`;
-				const json = (await this._runtime.request(command))[1];
-				logger.log(`${v} value: ${json}`);
-
-				try {
-					const parsed = JSON.parse(json);
-					switch (perlType) {
-						case 'REF':
-							// parent variable
-							vs.push(new Variable(vars[i], json, this.currentVarRef));
-							// child variables
-							this.parseVariableChilds(parsed);
-							break;
-						case 'HASH':
-							// parent variable
-							vs.push(new Variable(vars[i], json, this.currentVarRef));
-							// child variables
-							this.parseVariableChilds(parsed);
-							break;
-						case 'ARRAY':
-							// parent variable
-							const childVars: Array<any> = parsed;
-							vs.push(new Variable(vars[i], `(${childVars.join(', ')})`, this.currentVarRef));
-							// child variables
-							let cv: Variable[] = [];
-							for (let child in childVars) {
-								let value: string;
-								// add quotes to strings
-								if (isNaN(childVars[child])) {
-									value = `"${childVars[child]}"`;
-								} else {
-									value = `${childVars[child]}`;
-								}
-								cv.push(new Variable(child, value));
-							}
-							this.varsMap.set(this.currentVarRef, cv);
-							this.currentVarRef--;
-							break;
-						default:
-							// SCALAR
-							vs.push(new Variable(vars[i], `${json}`));
-							break;
-					}
-				}
-				catch {
-					const output = (await this._runtime.request(`print STDERR Dumper(${vars[i]})`));
-					vs.push(new Variable(vars[i], output[1]));
-				}
-			}
+			vs = await this.parseVars(vars);
 		} else {
 			// Get already parsed vars from map
-			const newVars = this.varsMap.get(ref);
+			const newVars = this.varsMap.get(args.variablesReference);
 			if (newVars) {
 				vs = vs.concat(newVars);
+			}
+		}
+
+		response.body = {
+			variables: vs
+		};
+
+		logger.log(`Variables: ${JSON.stringify(vs)}`);
+
+		this.sendResponse(response);
+	}
+
+	protected async evaluateRequest(response: DebugProtocol.EvaluateResponse, args: DebugProtocol.EvaluateArguments, request?: DebugProtocol.Request): Promise<void> {
+		const varName = args.expression;
+
+		// ensure that a variable is being evaluated
+		if (['$', '%', '@'].includes(varName.charAt(0)) === false) {
+			response.success = false;
+			this.sendResponse(response);
+			return;
+		}
+
+		// get variable value
+		const evaledVar = (await this.parseVars([varName]))[0];
+
+		response.body = {
+			result: evaledVar.value,
+			variablesReference: evaledVar.variablesReference,
+		};
+
+		this.sendResponse(response);
+	}
+
+	private async parseVars(varNames: string[]): Promise<Variable[]> {
+		let vs: Variable[] = [];
+		for (let i = 0; i < varNames.length; i++) {
+			let varName = varNames[i];
+			let command = `print STDERR (split (/\\(/, \\${varName}))[0]`;
+			const perlType = (await this._runtime.request(command))[1];
+			logger.log(`Perltype: ${perlType}`);
+			if (perlType === 'REF') {
+				// add % sign
+				varName = `{%${varName}}`;
+			}
+			if (perlType === 'ARRAY' || perlType === 'HASH') {
+				// add % sign
+				varName = `\\${varName}`;
+			}
+
+			// get variable values as json string
+			command = `print STDERR JSON->new->utf8->allow_nonref(1)->allow_blessed(1)->convert_blessed(1)->encode(${varName})`;
+			const json = (await this._runtime.request(command))[1];
+			logger.log(`${varName} value: ${json}`);
+
+			try {
+				const parsed = JSON.parse(json);
+				switch (perlType) {
+					case 'REF':
+						// parent variable
+						vs.push(new Variable(varNames[i], json, this.currentVarRef));
+						// child variables
+						this.parseVariableChilds(parsed);
+						break;
+					case 'HASH':
+						// parent variable
+						vs.push(new Variable(varNames[i], json, this.currentVarRef));
+						// child variables
+						this.parseVariableChilds(parsed);
+						break;
+					case 'ARRAY':
+						// parent variable
+						const childVars: Array<any> = parsed;
+						vs.push(new Variable(varNames[i], `(${childVars.join(', ')})`, this.currentVarRef));
+						// child variables
+						let cv: Variable[] = [];
+						for (let child in childVars) {
+							let value: string;
+							// add quotes to strings
+							if (isNaN(childVars[child])) {
+								value = `"${childVars[child]}"`;
+							} else {
+								value = `${childVars[child]}`;
+							}
+							cv.push(new Variable(child, value));
+						}
+						this.varsMap.set(this.currentVarRef, cv);
+						this.currentVarRef--;
+						break;
+					default:
+						// SCALAR
+						vs.push(new Variable(varNames[i], `${json}`));
+						break;
+				}
+			}
+			catch {
+				const output = (await this._runtime.request(`print STDERR Dumper(${varNames[i]})`));
+				vs.push(new Variable(varNames[i], output[1].split('$VAR1 = ')[1]));
 			}
 		}
 
@@ -383,6 +413,33 @@ export class PerlDebugSession extends LoggingDebugSession {
 		this._runtime.request(`${args.name} = ${args.value}`);
 		response.body = { value: `${args.value}` };
 		this.sendResponse(response);
+	}
+
+	protected async loadedSourcesRequest(response: DebugProtocol.LoadedSourcesResponse, args: DebugProtocol.LoadedSourcesArguments, request?: DebugProtocol.Request): Promise<void> {
+		let sources: Source[] = [];
+
+		const lines = await this._runtime.request('foreach my $INCKEY (keys %INC) { print STDERR $INCKEY . "||" . %INC{$INCKEY} . "\\n" }');
+		// remove first and last line
+		lines.slice(1, -1).forEach(line => {
+			const tmp = line.split('||');
+			if(tmp.length === 2) {
+				sources.push(new Source(tmp[0], tmp[1]));
+			}
+		});
+
+		response.body = {
+			sources: sources
+		};
+
+		this.sendResponse(response);
+	}
+
+	protected setFunctionBreakPointsRequest(response: DebugProtocol.SetFunctionBreakpointsResponse, args: DebugProtocol.SetFunctionBreakpointsArguments, request?: DebugProtocol.Request): void {
+		// TODO: Implement
+	}
+
+	protected breakpointLocationsRequest(response: DebugProtocol.BreakpointLocationsResponse, args: DebugProtocol.BreakpointLocationsArguments, request?: DebugProtocol.Request): void {
+		// TODO: Implement
 	}
 
 	protected async continueRequest(response: DebugProtocol.ContinueResponse, args: DebugProtocol.ContinueArguments): Promise<void> {
