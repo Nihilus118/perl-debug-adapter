@@ -73,14 +73,14 @@ export class PerlRuntimeWrapper extends EventEmitter {
 		});
 
 		// save the last output in case of an error
-		// let output: string = "";
-		// this._session.stderr!.on('data', (data) => {
-		// 	output = data.toString();
-		// });
+		let output: string = "";
+		this._session.stderr!.on('data', (data) => {
+			output = data.toString();
+		});
 
 		this._session.on('exit', code => {
 			// print the error if we can not start the debugger
-			// logger.error(`Could not start the debugging session! Code: ${code}\n${output}`);
+			logger.error(`Could not start the debugging session! Code: ${code}\n${output}`);
 			this.emit('end');
 			return;
 		});
