@@ -5,7 +5,7 @@
 import { logger } from '@vscode/debugadapter';
 import { ChildProcess, spawn, SpawnOptions } from 'child_process';
 import { EventEmitter } from 'events';
-import { IBreakpointData } from './perlDebug';
+import { IBreakpointData, IFunctionBreakpointData } from './perlDebug';
 import { ansiSeq, StreamCatcher } from './streamCatcher';
 
 export interface IRuntimeBreakpoint {
@@ -31,7 +31,7 @@ export class PerlRuntimeWrapper extends EventEmitter {
 	}
 
 	// Start executing the given program.
-	public async start(perlExecutable: string, program: string, stopOnEntry: boolean, debug: boolean, args: string[], bps: IBreakpointData[], argCWD: string): Promise<void> {
+	public async start(perlExecutable: string, program: string, stopOnEntry: boolean, debug: boolean, args: string[], bps: IBreakpointData[], funcBps: IFunctionBreakpointData[], argCWD: string): Promise<void> {
 		// Spawn perl process and handle errors
 		argCWD = this.normalizePathAndCasing(argCWD);
 		logger.log(`CWD: ${argCWD}`);
@@ -72,16 +72,15 @@ export class PerlRuntimeWrapper extends EventEmitter {
 			return;
 		});
 
-		// save the output in case of an error
-		let output: string;
-		const errorListerner = (data: any) => {
-			output += data.toString();
-		};
-		this._session.stderr!.on('data', errorListerner);
+		// save the last output in case of an error
+		// let output: string = "";
+		// this._session.stderr!.on('data', (data) => {
+		// 	output = data.toString();
+		// });
 
 		this._session.on('exit', code => {
 			// print the error if we can not start the debugger
-			logger.error(`Could not start the debugging session! Code: ${code}\n${output}`);
+			// logger.error(`Could not start the debugging session! Code: ${code}\n${output}`);
 			this.emit('end');
 			return;
 		});
@@ -96,9 +95,6 @@ export class PerlRuntimeWrapper extends EventEmitter {
 			this._session.stderr!
 		);
 
-		// launch was successfull so we can close the error listener
-		this._session.stderr!.removeListener('data', errorListerner);
-
 		// does the user want to debug the script or just run it?
 		if (debug) {
 			logger.log('Starting Debug');
@@ -112,12 +108,13 @@ export class PerlRuntimeWrapper extends EventEmitter {
 			for (let i = 0; i < bps.length; i++) {
 				const id = bps[i].id;
 				const file = this.normalizePathAndCasing(bps[i].file);
+				const condition = bps[i].condition;
 				let line = bps[i].line;
 				let success = false;
 				// try to set the breakpoint
 				for (let tries = 0; success === false && tries < this.maxBreakpointTries; tries++) {
 					// try to set the breakpoint
-					const data = (await this.request(`b ${file}:${line}`)).join("");
+					const data = (await this.request(`b ${file}:${line} ${condition}`)).join("");
 					if (data.includes('not breakable')) {
 						// try again at the next line
 						line++;
@@ -128,6 +125,16 @@ export class PerlRuntimeWrapper extends EventEmitter {
 					}
 				}
 			}
+			// set function breakpoints
+			for (let i = 0; i < funcBps.length; i++) {
+				const bp = funcBps[i];
+				const data = (await this.request(`b ${bp.name} ${bp.condition}`))[1];
+				if (data.includes('not found')) {
+					// try again at the next line
+					this.emit('OutputEvent', data, 'stderr');
+				}
+			}
+
 			logger.log(`StopOnEntry: ${stopOnEntry}`);
 			if (stopOnEntry) {
 				this.emit('stopOnEntry');
@@ -185,6 +192,14 @@ export class PerlRuntimeWrapper extends EventEmitter {
 		this.isEnd(await this.request('r'), 'stopOnStep');
 	}
 
+	public isActive(): boolean {
+		const type = typeof this.streamCatcher.input;
+		if (type !== 'undefined' && this.streamCatcher.input) {
+			return true;
+		} else {
+			return false;
+		}
+	}
 
 	public normalizePathAndCasing(path: string) {
 		if (process.platform === 'win32') {

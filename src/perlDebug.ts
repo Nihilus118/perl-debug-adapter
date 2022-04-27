@@ -17,10 +17,16 @@ export interface ILaunchRequestArguments extends DebugProtocol.LaunchRequestArgu
 	env?: object[];
 }
 
+export interface IFunctionBreakpointData {
+	name: string,
+	condition: string;
+}
+
 export interface IBreakpointData {
 	file: string,
 	line: number,
-	id: number;
+	id: number,
+	condition: string;
 }
 
 export class PerlDebugSession extends LoggingDebugSession {
@@ -35,6 +41,7 @@ export class PerlDebugSession extends LoggingDebugSession {
 	private _variableHandles = new Handles<'locals' | 'globals'>();
 	private varsMap = new Map<number, Variable[]>();
 	private bps: IBreakpointData[] = [];
+	private funcBps: IFunctionBreakpointData[] = [];
 	private cwd: string = "";
 
 	public constructor() {
@@ -90,14 +97,12 @@ export class PerlDebugSession extends LoggingDebugSession {
 		// make VS Code send setVariable request
 		response.body.supportsSetVariable = true;
 
-		// make VS Code send breakpointLocationsRequest request
-		response.body.supportsBreakpointLocationsRequest = true;
-
 		// make VS Code send loadedSourcesRequest request
 		response.body.supportsLoadedSourcesRequest = true;
 
 		// make VS Code send SetFunctionBreakpointsRequest request
 		response.body.supportsFunctionBreakpoints = true;
+		response.body.supportsConditionalBreakpoints = true;
 
 		this.sendResponse(response);
 
@@ -142,6 +147,7 @@ export class PerlDebugSession extends LoggingDebugSession {
 			args.debug || true,
 			args.args || [],
 			this.bps,
+			this.funcBps,
 			this.cwd
 		);
 		this.sendResponse(response);
@@ -149,15 +155,49 @@ export class PerlDebugSession extends LoggingDebugSession {
 
 	protected async setBreakPointsRequest(response: DebugProtocol.SetBreakpointsResponse, args: DebugProtocol.SetBreakpointsArguments): Promise<void> {
 		// save breakpoints in memory and hand them over in the launch request later
-		const clientLines = args.lines!;
+		const argBps = args.breakpoints!;
+		this.currentBreakpointID = 1;
 
 		let bps: Breakpoint[] = [];
-		this.currentBreakpointID = 1;
-		for (let i = 0; i < clientLines.length; i++) {
-			const bp = new Breakpoint(false, clientLines[i], undefined, args.source as Source);
+
+		for (let i = 0; i < argBps.length; i++) {
+			let line = argBps[i].line;
+			let success = false;
+
+			// this is only possible if the runtime is currently active
+			if (this._runtime.isActive()) {
+				// first we clear all existing breakpoints
+				for (let i = 0; i < this.bps.length; i++) {
+					const bp = this.bps[i];
+					const data = await this._runtime.request(`B ${bp.line}`);
+					// TODO: Remove after testing
+					logger.log(data.join());
+				}
+				// now we try to set every breakpoint requested
+				for (let tries = 0; success === false && tries < 15; tries++) {
+					const data = (await this._runtime.request(`b ${args.source.path}:${line} ${argBps[i].condition}`)).join();
+					if (data.includes('not breakable')) {
+						// try again at the next line
+						line++;
+					} else {
+						// a breakable line was found and the breakpoint set
+						success = true;
+					}
+				}
+			} else {
+				logger.warn('Can not set breakpoint. Runtime is not active yet');
+			}
+
+			const bp = new Breakpoint(success, line, undefined, args.source as Source);
 			bp.setId(this.currentBreakpointID);
-			this.bps.push({ id: this.currentBreakpointID, line: clientLines[i], file: args.source.path as String } as IBreakpointData);
+			this.bps.push({
+				id: this.currentBreakpointID,
+				line: line,
+				file: args.source.path as String,
+				condition: argBps[i].condition
+			} as IBreakpointData);
 			bps.push(bp);
+
 			this.currentBreakpointID++;
 		}
 
@@ -165,6 +205,26 @@ export class PerlDebugSession extends LoggingDebugSession {
 		response.body = {
 			breakpoints: bps
 		};
+		this.sendResponse(response);
+	}
+
+	protected async setFunctionBreakPointsRequest(response: DebugProtocol.SetFunctionBreakpointsResponse, args: DebugProtocol.SetFunctionBreakpointsArguments, request?: DebugProtocol.Request): Promise<void> {
+		for (let i = 0; i < args.breakpoints.length; i++) {
+			const bp = args.breakpoints[i];
+			this.funcBps.push({
+				name: bp.name,
+				condition: bp.condition || ''
+			});
+
+			// this is only possible if the runtime is currently active
+			if (this._runtime.isActive()) {
+				await this._runtime.request(`b ${bp.name} ${bp.condition}`);
+
+			} else {
+				logger.warn('Can not set function breakpoint. Runtime is not active yet');
+			}
+		}
+
 		this.sendResponse(response);
 	}
 
@@ -422,7 +482,7 @@ export class PerlDebugSession extends LoggingDebugSession {
 		// remove first and last line
 		lines.slice(1, -1).forEach(line => {
 			const tmp = line.split('||');
-			if(tmp.length === 2) {
+			if (tmp.length === 2) {
 				sources.push(new Source(tmp[0], tmp[1]));
 			}
 		});
@@ -432,14 +492,6 @@ export class PerlDebugSession extends LoggingDebugSession {
 		};
 
 		this.sendResponse(response);
-	}
-
-	protected setFunctionBreakPointsRequest(response: DebugProtocol.SetFunctionBreakpointsResponse, args: DebugProtocol.SetFunctionBreakpointsArguments, request?: DebugProtocol.Request): void {
-		// TODO: Implement
-	}
-
-	protected breakpointLocationsRequest(response: DebugProtocol.BreakpointLocationsResponse, args: DebugProtocol.BreakpointLocationsArguments, request?: DebugProtocol.Request): void {
-		// TODO: Implement
 	}
 
 	protected async continueRequest(response: DebugProtocol.ContinueResponse, args: DebugProtocol.ContinueArguments): Promise<void> {
