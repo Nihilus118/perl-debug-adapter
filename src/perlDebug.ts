@@ -4,7 +4,7 @@ import {
 } from '@vscode/debugadapter';
 import { DebugProtocol } from '@vscode/debugprotocol';
 import { Subject } from 'await-notify';
-import { dirname, join, basename } from 'path';
+import { basename, dirname, join } from 'path';
 import { PerlRuntimeWrapper } from './perlRuntimeWrapper';
 
 export interface ILaunchRequestArguments extends DebugProtocol.LaunchRequestArguments {
@@ -169,9 +169,7 @@ export class PerlDebugSession extends LoggingDebugSession {
 				// first we clear all existing breakpoints
 				for (let i = 0; i < this.bps.length; i++) {
 					const bp = this.bps[i];
-					const data = await this._runtime.request(`B ${bp.line}`);
-					// TODO: Remove after testing
-					logger.log(data.join());
+					await this._runtime.request(`B ${bp.line}`);
 				}
 				// now we try to set every breakpoint requested
 				for (let tries = 0; success === false && tries < 15; tries++) {
@@ -280,9 +278,8 @@ export class PerlDebugSession extends LoggingDebugSession {
 	}
 
 	protected async variablesRequest(response: DebugProtocol.VariablesResponse, args: DebugProtocol.VariablesArguments, request?: DebugProtocol.Request): Promise<void> {
-		// 1000 => my
-		// 1001 => our
-		// 1002 => global
+		// 1000 => local
+		// 1001 => global
 		// < 1000 => nested vars
 		let vars: string[] = [];
 		let vs: Variable[] = [];
@@ -342,8 +339,6 @@ export class PerlDebugSession extends LoggingDebugSession {
 			variables: vs
 		};
 
-		logger.log(`Variables: ${JSON.stringify(vs)}`);
-
 		this.sendResponse(response);
 	}
 
@@ -372,66 +367,35 @@ export class PerlDebugSession extends LoggingDebugSession {
 		let vs: Variable[] = [];
 		for (let i = 0; i < varNames.length; i++) {
 			let varName = varNames[i];
-			let command = `print STDERR (split (/\\(/, \\${varName}))[0]`;
-			const perlType = (await this._runtime.request(command))[1];
-			logger.log(`Perltype: ${perlType}`);
-			if (perlType === 'REF') {
-				// add % sign
-				varName = `{%${varName}}`;
-			}
-			if (perlType === 'ARRAY' || perlType === 'HASH') {
-				// add % sign
-				varName = `\\${varName}`;
+			if (varName.startsWith('@')) {
+				varName = `[${varName}]`;
 			}
 
-			// get variable values as json string
-			command = `print STDERR JSON->new->utf8->allow_nonref(1)->allow_blessed(1)->convert_blessed(1)->encode(${varName})`;
-			const json = (await this._runtime.request(command))[1];
-			logger.log(`${varName} value: ${json}`);
-
-			try {
-				const parsed = JSON.parse(json);
-				switch (perlType) {
-					case 'REF':
-						// parent variable
-						vs.push(new Variable(varNames[i], json, this.currentVarRef));
-						// child variables
-						this.parseVariableChilds(parsed);
-						break;
-					case 'HASH':
-						// parent variable
-						vs.push(new Variable(varNames[i], json, this.currentVarRef));
-						// child variables
-						this.parseVariableChilds(parsed);
-						break;
-					case 'ARRAY':
-						// parent variable
-						const childVars: Array<any> = parsed;
-						vs.push(new Variable(varNames[i], `(${childVars.join(', ')})`, this.currentVarRef));
-						// child variables
-						let cv: Variable[] = [];
-						for (let child in childVars) {
-							let value: string;
-							// add quotes to strings
-							if (isNaN(childVars[child])) {
-								value = `"${childVars[child]}"`;
-							} else {
-								value = `${childVars[child]}`;
-							}
-							cv.push(new Variable(child, value));
-						}
-						this.varsMap.set(this.currentVarRef, cv);
-						this.currentVarRef--;
-						break;
-					default:
-						// SCALAR
-						vs.push(new Variable(varNames[i], `${json}`));
-						break;
+			let varDump = (await this._runtime.request(`print STDERR Data::Dumper->new([${varName}], ['${varNames[i]}'])->Deepcopy(1)->Sortkeys(1)->Indent(1)->Terse(0)->Trailingcomma(1)->Useqq(1)->Dump()`)).slice(1, -1);
+			if (varDump[0]) {
+				varDump[0] = varDump[0].replace(/=/, '=>');
+				const matched = varDump[0].match(this.isScalar);
+				if (matched) {
+					vs.push({
+						name: varNames[i],
+						value: `${matched[2]}`,
+						variablesReference: 0
+					});
+				} else {
+					this.currentVarRef--;
+					vs.push({
+						name: varNames[i],
+						value: varDump.join(' '),
+						variablesReference: this.currentVarRef
+					});
+					await this.parseDumper(varDump.slice(1, -1));
 				}
-			}
-			catch {
-				const output = (await this._runtime.request(`print STDERR Dumper(${varNames[i]})`));
-				vs.push(new Variable(varNames[i], output[1].split('$VAR1 = ')[1]));
+			} else {
+				vs.push({
+					name: varNames[i],
+					value: 'undef',
+					variablesReference: 0
+				});
 			}
 		}
 
@@ -439,34 +403,60 @@ export class PerlDebugSession extends LoggingDebugSession {
 		return vs;
 	}
 
-	private parseVariableChilds(childs: object) {
+	// Regexp for parsing the output of Data::Dumper
+	private isScalar = /"?(.*)"?\s=>?\s(undef|".*"|-?\d+|\[\]|\{\}|bless\(.*\)|sub\s\{.*\})[,|;]/;
+	private isNewNested = /^\{$|"?(.*)"?\s=>?\s(bless\(\s)?(\[|\{)/;
+	private isArrayPosition = /^(undef|".*"|-?\d+|\[\]|\{\}|bless\(.*\)|sub\s\{.*\})[,|;]/;
+	private isVarEnd = /^(\}|\]),?(\s?'(.*)'\s\))?,/;
+	// Parse output of Data::Dumper
+	private async parseDumper(lines: string[]): Promise<number> {
 		let cv: Variable[] = [];
+		let arrayIndex = 0;
 		const ref = this.currentVarRef;
 		this.currentVarRef--;
-		for (let child in childs) {
-			if (this.isObject(childs[child])) {
-				// we have found a new parent
-				cv.push(new Variable(`${child}`, `${JSON.stringify(childs[child])}`, this.currentVarRef));
-				// call this function recursivly to also parse the childs of a child
-				this.parseVariableChilds(childs[child]);
+
+		let i: number;
+		for (i = 0; i < lines.length; i++) {
+			const line = lines[i].trim();
+			if (line.match(this.isVarEnd) || line === '}') {
+				break;
 			} else {
-				// add child to the list of new childs
-				let value: string;
-				// add quotes to strings
-				if (isNaN(childs[child])) {
-					value = `"${childs[child]}"`;
-				} else {
-					value = `${childs[child]}`;
+				let matched = line.match(this.isScalar);
+				if (matched) {
+					cv.push({
+						name: matched[1].replace(/"/, ''),
+						value: matched[2],
+						variablesReference: 0
+					});
+					continue;
 				}
-				cv.push(new Variable(`${child}`, `${value}`));
+				matched = line.match(this.isArrayPosition);
+				if (matched) {
+					cv.push({
+						name: `${arrayIndex}`,
+						value: matched[1],
+						variablesReference: 0
+					});
+					arrayIndex++;
+					continue;
+				}
+				matched = line.match(this.isNewNested);
+				if (matched) {
+					cv.push({
+						name: matched[1],
+						value: '',
+						variablesReference: this.currentVarRef
+					});
+					const newIndex = await this.parseDumper(lines.slice(i + 1));
+					i += newIndex;
+					continue;
+				}
+				logger.error(`Error: ${line}`);
 			}
 		}
 		this.varsMap.set(ref, cv);
+		return i + 1;
 	}
-
-	private isObject(a: any) {
-		return (!!a) && (a.constructor === Object);
-	};
 
 	protected setVariableRequest(response: DebugProtocol.SetVariableResponse, args: DebugProtocol.SetVariableArguments): void {
 		// TODO: Check variable and value type

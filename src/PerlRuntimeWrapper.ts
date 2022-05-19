@@ -1,7 +1,3 @@
-/*---------------------------------------------------------
- * Copyright (C) Microsoft Corporation. All rights reserved.
- *--------------------------------------------------------*/
-
 import { logger } from '@vscode/debugadapter';
 import { ChildProcess, spawn, SpawnOptions } from 'child_process';
 import { EventEmitter } from 'events';
@@ -99,9 +95,9 @@ export class PerlRuntimeWrapper extends EventEmitter {
 		if (debug) {
 			logger.log('Starting Debug');
 			// use PadWalker to access variables in scope and JSON the send data to perlDebug.ts
-			const lines = await this.request('use PadWalker qw/peek_our peek_my/; use JSON; use Data::Dumper;');
+			let lines = await this.request('use PadWalker qw/peek_our peek_my/; use Data::Dumper;');
 			if (lines.join().includes('Can\'t locate')) {
-				this.emit('output', `Couldn't start the Debugger! Modules JSON, Data::Dumper and PadWalker are required to run this debugger. Please install them and try again.`);
+				this.emit('output', lines.join('\n'));
 				this.emit('end');
 			}
 			// set breakpoints
@@ -143,6 +139,7 @@ export class PerlRuntimeWrapper extends EventEmitter {
 			}
 		} else {
 			// Just run
+			logger.log('Running script');
 			await this.continue();
 		}
 	}
@@ -150,12 +147,6 @@ export class PerlRuntimeWrapper extends EventEmitter {
 	async request(command: string): Promise<string[]> {
 		logger.log(`Command: ${command}`);
 		return (await this.streamCatcher.request(command)).filter(e => { return e !== ''; });
-	}
-
-	public async getBreakpoints() {
-		const lines = await this.request("L b");
-		// TODO: Parse breakpoints
-		return lines;
 	}
 
 	private isEnd(lines: string[], event: string): boolean {
