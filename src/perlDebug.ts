@@ -38,7 +38,7 @@ export class PerlDebugSession extends LoggingDebugSession {
 
 	private _runtime: PerlRuntimeWrapper;
 
-	private _variableHandles = new Handles<'locals' | 'globals'>();
+	private _variableHandles = new Handles<'my' | 'our' | 'special'>();
 	private varsMap = new Map<number, Variable[]>();
 	private bps: IBreakpointData[] = [];
 	private funcBps: IFunctionBreakpointData[] = [];
@@ -270,8 +270,9 @@ export class PerlDebugSession extends LoggingDebugSession {
 
 		response.body = {
 			scopes: [
-				new Scope("Locals", this._variableHandles.create('locals'), false),
-				new Scope("Globals", this._variableHandles.create('globals'), true)
+				new Scope("My", this._variableHandles.create('my'), false),
+				new Scope("Our", this._variableHandles.create('our'), false),
+				new Scope("Specials", this._variableHandles.create('special'), true)
 			]
 		};
 		this.sendResponse(response);
@@ -283,18 +284,22 @@ export class PerlDebugSession extends LoggingDebugSession {
 		// < 1000 => nested vars
 		let vars: string[] = [];
 		let vs: Variable[] = [];
+		const handle = this._variableHandles.get(args.variablesReference);
 		if (args.variablesReference >= 1000) {
-			if (args.variablesReference % 2 === 0) {
-				vars = (await this._runtime.request(`print STDERR join ('|', sort(keys( % { peek_our(2); }), keys( % { peek_my(2); })))`))[1].split('|');
+			if (handle === 'my') {
+				vars = (await this._runtime.request(`print STDERR join ('|', sort(keys( % { peek_my(2); })))`))[1].split('|');
 				logger.log(`Varnames: ${vars.join(', ')}`);
 			}
-			else if (args.variablesReference % 2 === 1) {
+			if (handle === 'our') {
+				vars = (await this._runtime.request(`print STDERR join ('|', sort(keys( % { peek_our(2); })))`))[1].split('|');
+				logger.log(`Varnames: ${vars.join(', ')}`);
+			}
+			else if (handle === 'special') {
 				vars = [
+					"{%ENV}",
 					"@ARGV",
 					"@INC",
 					"@F",
-					"%INC",
-					"%ENV",
 					"$SIG",
 					"$ARG",
 					"$NR",
