@@ -239,23 +239,20 @@ export class PerlDebugSession extends LoggingDebugSession {
 
 	protected async stackTraceRequest(response: DebugProtocol.StackTraceResponse, args: DebugProtocol.StackTraceArguments): Promise<void> {
 		let stackFrames: StackFrame[] = [];
+		const stackTrace = /^[@|.]\s=\s(.*)\scalled\sfrom\sfile\s'(.*)'\sline\s(\d+)/;
 
-		const lines = await this._runtime.request('T');
-		let count = 1;
+		const lines = (await this._runtime.request('T')).slice(1, -1);
 		for (let i = 0; i < lines.length; i++) {
 			const line = lines[i];
-			if (line.startsWith('@')) {
-				let nm = line.split(' = ')[1];
-				nm = nm.split("'")[0];
-				let file = line.split("'")[1];
+			const matched = line.match(stackTrace);
+			if (matched) {
+				let file = line.split("called from file")[1];
 				if (file.includes('./')) {
 					file = join(this.cwd, file);
 				}
-				file = this._runtime.normalizePathAndCasing(file);
+				file = this._runtime.normalizePathAndCasing(matched[2]);
 				const fn = new Source(basename(file), file);
-				const ln = line.split('line ')[1];
-				stackFrames.push(new StackFrame(count, nm, fn, +ln));
-				count++;
+				stackFrames.push(new StackFrame(i, matched[1], fn, +matched[3]));
 			}
 		}
 
