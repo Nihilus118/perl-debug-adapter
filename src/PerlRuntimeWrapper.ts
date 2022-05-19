@@ -149,7 +149,7 @@ export class PerlRuntimeWrapper extends EventEmitter {
 		return (await this.streamCatcher.request(command)).filter(e => { return e !== ''; });
 	}
 
-	private isEnd(lines: string[], event: string): boolean {
+	private async isEnd(lines: string[], event: string): Promise<boolean> {
 		const text = lines.join();
 
 		if (text.includes('Debugged program terminated.')) {
@@ -159,6 +159,8 @@ export class PerlRuntimeWrapper extends EventEmitter {
 			});
 			lines = lines.slice(1, index);
 			this.emit('output', lines.join('\n'));
+			// ensure that every script output is send to the debug console before closing the session
+			await this.request('sleep(.5)');
 			this.emit('end');
 			return true;
 		}
@@ -168,19 +170,19 @@ export class PerlRuntimeWrapper extends EventEmitter {
 	}
 
 	public async continue() {
-		this.isEnd(await this.request('c'), 'stopOnBreakpoint');
+		await this.isEnd(await this.request('c'), 'stopOnBreakpoint');
 	}
 
 	public async step(signal: string = 'stopOnStep') {
-		this.isEnd(await this.request('n'), signal);
+		await this.isEnd(await this.request('n'), signal);
 	}
 
 	public async stepIn() {
-		this.isEnd(await this.request('s'), 'stopOnStep');
+		await this.isEnd(await this.request('s'), 'stopOnStep');
 	}
 
 	public async stepOut() {
-		this.isEnd(await this.request('r'), 'stopOnStep');
+		await this.isEnd(await this.request('r'), 'stopOnStep');
 	}
 
 	public isActive(): boolean {
