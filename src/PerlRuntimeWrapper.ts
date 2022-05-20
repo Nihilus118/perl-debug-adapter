@@ -83,7 +83,7 @@ export class PerlRuntimeWrapper extends EventEmitter {
 
 		// send the script output to the debug console
 		this._session.stdout!.on('data', (data) => {
-			this.emit('output', data.toString().replace(ansiSeq, ''));
+			this.emit('output', data.toString().replace(ansiSeq, ''), 'stdout');
 		});
 
 		await this.streamCatcher.launch(
