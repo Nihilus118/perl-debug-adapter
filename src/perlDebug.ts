@@ -134,7 +134,7 @@ export class PerlDebugSession extends LoggingDebugSession {
 		this.cwd = args.cwd || dirname(args.program);
 
 		// setup logger
-		logger.setup(Logger.LogLevel.Log, false);
+		logger.setup(Logger.LogLevel.Warn, false);
 
 		// wait 1 second until configuration has finished (and configurationDoneRequest has been called)
 		await this._configurationDone.wait(1000);
@@ -183,7 +183,7 @@ export class PerlDebugSession extends LoggingDebugSession {
 					}
 				}
 			} else {
-				logger.warn('Can not set breakpoint. Runtime is not active yet');
+				logger.log('Can not set breakpoint. Runtime is not active yet');
 			}
 
 			const bp = new Breakpoint(success, line, undefined, args.source as Source);
@@ -276,19 +276,17 @@ export class PerlDebugSession extends LoggingDebugSession {
 	}
 
 	protected async variablesRequest(response: DebugProtocol.VariablesResponse, args: DebugProtocol.VariablesArguments, request?: DebugProtocol.Request): Promise<void> {
-		// 1000 => local
-		// 1001 => global
-		// < 1000 => nested vars
 		let vars: string[] = [];
 		let vs: Variable[] = [];
 		const handle = this._variableHandles.get(args.variablesReference);
+		// < 1000 => nested vars
 		if (args.variablesReference >= 1000) {
 			if (handle === 'my') {
-				vars = (await this._runtime.request(`print STDERR join ('|', sort(keys( % { peek_my(2); })))`))[1].split('|');
+				vars = (await this._runtime.request(`print STDERR join ('|', sort(keys( % { PadWalker::peek_my(2); })))`))[1].split('|');
 				logger.log(`Varnames: ${vars.join(', ')}`);
 			}
 			if (handle === 'our') {
-				vars = (await this._runtime.request(`print STDERR join ('|', sort(keys( % { peek_our(2); })))`))[1].split('|');
+				vars = (await this._runtime.request(`print STDERR join ('|', sort(keys( % { PadWalker::peek_our(2); })))`))[1].split('|');
 				logger.log(`Varnames: ${vars.join(', ')}`);
 			}
 			else if (handle === 'special') {
@@ -371,13 +369,15 @@ export class PerlDebugSession extends LoggingDebugSession {
 			let varName = varNames[i];
 			if (varName.startsWith('@')) {
 				varName = `[${varName}]`;
+			} else if (varName.startsWith('%')) {
+				varName = `{${varName}}`;
 			}
 
 			let varDump = (await this._runtime.request(`print STDERR Data::Dumper->new([${varName}], ['${varNames[i]}'])->Deepcopy(1)->Sortkeys(1)->Indent(1)->Terse(0)->Trailingcomma(1)->Useqq(1)->Dump()`)).slice(1, -1);
 			if (varDump[0]) {
 				varDump[0] = varDump[0].replace(/=/, '=>');
 				const matched = varDump[0].match(this.isScalar);
-				if (matched) {
+				if (matched && varDump.length === 1) {
 					vs.push({
 						name: varNames[i],
 						value: `${matched[2]}`,
