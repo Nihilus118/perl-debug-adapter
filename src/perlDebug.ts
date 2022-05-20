@@ -413,7 +413,8 @@ export class PerlDebugSession extends LoggingDebugSession {
 
 	// Regexp for parsing the output of Data::Dumper
 	private isScalar = /"?(.*)"?\s=>?\s(undef|".*"|-?\d+|\[\]|\{\}|bless\(.*\)|sub\s\{.*\})[,|;]/;
-	private isNewNested = /^\{$|"?(.*)"?\s=>?\s(bless\(\s)?(\[|\{)/;
+	private isNewNested = /"?(.*)"?\s=>?\s(bless\(\s)?(\[|\{)/;
+	private isNestedArrayPosition = /^(\{|\[)$/;
 	private isArrayPosition = /^(undef|".*"|-?\d+|\[\]|\{\}|bless\(.*\)|sub\s\{.*\})[,|;]/;
 	private isVarEnd = /^(\}|\]),?(\s?'(.*)'\s\))?,/;
 	// Parse output of Data::Dumper
@@ -445,6 +446,18 @@ export class PerlDebugSession extends LoggingDebugSession {
 						value: matched[1],
 						variablesReference: 0
 					});
+					arrayIndex++;
+					continue;
+				}
+				matched = line.match(this.isNestedArrayPosition);
+				if (matched) {
+					cv.push({
+						name: `${arrayIndex}`,
+						value: '',
+						variablesReference: this.currentVarRef
+					});
+					const newIndex = await this.parseDumper(lines.slice(i + 1));
+					i += newIndex;
 					arrayIndex++;
 					continue;
 				}
@@ -481,7 +494,7 @@ export class PerlDebugSession extends LoggingDebugSession {
 		lines.slice(1, -1).forEach(line => {
 			const tmp = line.split('||');
 			if (tmp.length === 2) {
-				sources.push(new Source(tmp[0], tmp[1]));
+				sources.push(new Source(tmp[0], tmp[1].replace(/^\.\//, `${this.cwd}/`)));
 			}
 		});
 
@@ -509,6 +522,17 @@ export class PerlDebugSession extends LoggingDebugSession {
 
 	protected async stepOutRequest(response: DebugProtocol.StepOutResponse, args: DebugProtocol.StepOutArguments, request?: DebugProtocol.Request): Promise<void> {
 		await this._runtime.stepOut();
+		this.sendResponse(response);
+	}
+
+	protected async restartRequest(response: DebugProtocol.RestartResponse, args: DebugProtocol.RestartArguments, request?: DebugProtocol.Request): Promise<void> {
+		this._runtime.destroy();
+		this.sendResponse(response);
+	}
+
+	protected async terminateRequest(response: DebugProtocol.TerminateResponse, args: DebugProtocol.TerminateArguments, request?: DebugProtocol.Request): Promise<void> {
+		await this._runtime.request('q');
+		this._runtime.destroy();
 		this.sendResponse(response);
 	}
 }
