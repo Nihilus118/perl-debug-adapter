@@ -291,7 +291,7 @@ export class PerlDebugSession extends LoggingDebugSession {
 			}
 			else if (handle === 'special') {
 				vars = [
-					"{%ENV}",
+					"%ENV",
 					"@ARGV",
 					"@INC",
 					"@F",
@@ -343,13 +343,19 @@ export class PerlDebugSession extends LoggingDebugSession {
 	}
 
 	protected async evaluateRequest(response: DebugProtocol.EvaluateResponse, args: DebugProtocol.EvaluateArguments, request?: DebugProtocol.Request): Promise<void> {
-		const varName = args.expression;
+		let varName = args.expression;
 
 		// ensure that a variable is being evaluated
 		if (['$', '%', '@'].includes(varName.charAt(0)) === false) {
 			response.success = false;
 			this.sendResponse(response);
 			return;
+		}
+
+		if (varName.startsWith('@')) {
+			varName = `[${varName}]`;
+		} else if (varName.startsWith('%')) {
+			varName = `{${varName}}`;
 		}
 
 		// get variable value
@@ -373,7 +379,7 @@ export class PerlDebugSession extends LoggingDebugSession {
 				varName = `{${varName}}`;
 			}
 
-			let varDump = (await this._runtime.request(`print STDERR Data::Dumper->new([${varName}], ['${varNames[i]}'])->Deepcopy(1)->Sortkeys(1)->Indent(1)->Terse(0)->Trailingcomma(1)->Useqq(1)->Dump()`)).slice(1, -1);
+			let varDump = (await this._runtime.request(`print STDERR Data::Dumper->new([${varName}], [])->Deepcopy(1)->Sortkeys(1)->Indent(1)->Terse(0)->Trailingcomma(1)->Useqq(1)->Dump()`)).slice(1, -1);
 			if (varDump[0]) {
 				varDump[0] = varDump[0].replace(/=/, '=>');
 				const matched = varDump[0].match(this.isScalar);
