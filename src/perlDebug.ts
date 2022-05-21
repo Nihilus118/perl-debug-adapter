@@ -271,6 +271,7 @@ export class PerlDebugSession extends LoggingDebugSession {
 			]
 		};
 		// clear parsed variables and reset counter
+		this.parentVarsMap.clear();
 		this.childVarsMap.clear();
 		this.currentVarRef = 999;
 		this.sendResponse(response);
@@ -464,11 +465,11 @@ export class PerlDebugSession extends LoggingDebugSession {
 						value: '',
 						variablesReference: this.currentVarRef
 					};
+					this.parentVarsMap.set(this.currentVarRef, newVar);
 					const parsed = await this.parseDumper(lines.slice(i + 1));
 					i += parsed[0];
 					newVar.value = parsed[1];
 					cv.push(newVar);
-					this.parentVarsMap.set(ref, newVar);
 					arrayIndex++;
 					continue;
 				}
@@ -479,11 +480,11 @@ export class PerlDebugSession extends LoggingDebugSession {
 						value: '',
 						variablesReference: this.currentVarRef
 					};
+					this.parentVarsMap.set(this.currentVarRef, newVar);
 					const parsed = await this.parseDumper(lines.slice(i + 1));
 					i += parsed[0];
 					newVar.value = parsed[1];
 					cv.push(newVar);
-					this.parentVarsMap.set(ref, newVar);
 					continue;
 				}
 				logger.error(`Error: ${line}`);
@@ -495,28 +496,42 @@ export class PerlDebugSession extends LoggingDebugSession {
 
 	protected async setVariableRequest(response: DebugProtocol.SetVariableResponse, args: DebugProtocol.SetVariableArguments): Promise<void> {
 		let currentVarRef = args.variablesReference;
-		let parentVars: Variable[] = [];
-		let expressionToChange = args.name;
-		while (true) {
-			const parent = this.parentVarsMap.get(currentVarRef);
-			if (parent) {
-				parentVars.push(parent);
-				switch (parent.value.match(/^(ARRAY|HASH)/)![1]) {
-					case 'ARRAY':
-						expressionToChange = `${parent.name}[${expressionToChange}]`;
-						break;
-					case 'HASH':
-						expressionToChange = `${parent.name.replace(/^%/, '$')}{${expressionToChange}}`;
-						break;
-					default:
-						logger.error(`Unknown variable Type: ${parent.value}`);
-						break;
+		let expressionToChange: string = args.name;
+
+		if (this.parentVarsMap.has(currentVarRef)) {
+			let lastParent: Variable | undefined = this.childVarsMap.get(currentVarRef)!.find(e => { return e.name === args.name; });
+			let parentVars: Variable[] = [lastParent!];
+			let parent: Variable | undefined;
+			while ((parent = this.parentVarsMap.get(currentVarRef)) && lastParent) {
+				const childsOfParent = this.childVarsMap.get(currentVarRef);
+				if (parent && childsOfParent!.includes(lastParent)) {
+					parentVars.push(parent);
+					// we need to store the last parent variable to find the parent of the lastParent
+					lastParent = parent;
 				}
-				// Maybe we need a minus
 				currentVarRef++;
 			}
-			else {
-				break;
+			// Now we can build the expression
+			parentVars = parentVars.reverse();
+			let currentType = parentVars[0].value.match(/(^ARRAY|^HASH)/)![1];
+			for (let i = 0; i < parentVars.length; i++) {
+				const parentVar = parentVars[i];
+				if (i === 0) {
+					expressionToChange = `${parentVar.name.replace(/^%/, '$')}`;
+				} else {
+					switch (currentType) {
+						case 'ARRAY':
+							expressionToChange = `${expressionToChange}[${parentVar.name}]`;
+							break;
+						case 'HASH':
+							expressionToChange = `${(expressionToChange.endsWith(']') ? `${expressionToChange}->` : expressionToChange)}{'${parentVar.name}'}`;
+							break;
+						default:
+							logger.error(`error: ${currentType}`);
+							break;
+					}
+					currentType = parentVar.value.match(/(^ARRAY|^HASH|.*)/)![1];
+				}
 			}
 		}
 		const lines = await this._runtime.request(`${expressionToChange} = ${args.value}`);
@@ -524,7 +539,8 @@ export class PerlDebugSession extends LoggingDebugSession {
 			this.sendEvent(new OutputEvent(`Error setting value: ${lines.join(' ')}`, 'important'));
 			response.success = false;
 		} else {
-			response.body = { value: `${args.value}` };
+			const value = (await this._runtime.request(`print STDERR Data::Dumper->new([${(expressionToChange.startsWith('@') ? `[${expressionToChange}]` : (expressionToChange.startsWith('%') ? `{${expressionToChange}}` : expressionToChange))}], [])->Useqq(1)->Terse(1)->Dump()`)).slice(1, -1).join(' ');
+			response.body = { value: `${value}` };
 		}
 		this.sendResponse(response);
 	}

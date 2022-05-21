@@ -9,3 +9,6 @@
 * List loaded sources
 * Change the value of simple scalar variables
 * Variables split into 'My', 'Our' and 'Special' scopes
+## 0.0.3
+* Fix a variable parsing bug
+* Change the values of nested variables
