@@ -39,7 +39,8 @@ export class PerlDebugSession extends LoggingDebugSession {
 	private _runtime: PerlRuntimeWrapper;
 
 	private _variableHandles = new Handles<'my' | 'our' | 'special'>();
-	private varsMap = new Map<number, Variable[]>();
+	private childVarsMap = new Map<number, Variable[]>();
+	private parentVarsMap = new Map<number, Variable>();
 	private bps: IBreakpointData[] = [];
 	private funcBps: IFunctionBreakpointData[] = [];
 	private cwd: string = "";
@@ -125,9 +126,6 @@ export class PerlDebugSession extends LoggingDebugSession {
 
 	protected async launchRequest(response: DebugProtocol.LaunchResponse, args: ILaunchRequestArguments) {
 
-		// clear parsed variables and reset counters
-		this.varsMap.clear();
-		this.currentVarRef = 999;
 		this.currentBreakpointID = 1;
 
 		// set cwd
@@ -272,6 +270,9 @@ export class PerlDebugSession extends LoggingDebugSession {
 				new Scope("Specials", this._variableHandles.create('special'), true)
 			]
 		};
+		// clear parsed variables and reset counter
+		this.childVarsMap.clear();
+		this.currentVarRef = 999;
 		this.sendResponse(response);
 	}
 
@@ -329,7 +330,7 @@ export class PerlDebugSession extends LoggingDebugSession {
 			vs = await this.parseVars(vars);
 		} else {
 			// Get already parsed vars from map
-			const newVars = this.varsMap.get(args.variablesReference);
+			const newVars = this.childVarsMap.get(args.variablesReference);
 			if (newVars) {
 				vs = vs.concat(newVars);
 			}
@@ -391,11 +392,15 @@ export class PerlDebugSession extends LoggingDebugSession {
 					});
 				} else {
 					this.currentVarRef--;
-					vs.push({
+					const matched = varDump[varDump.length - 1].trim().match(this.isVarEnd);
+					const value = `${(matched![1] === '}' ? 'HASH' : 'ARRAY')}${(matched![3] ? ` ${matched![3]}` : '')}`;
+					const newVar: Variable = {
 						name: varNames[i],
-						value: varDump.join(' '),
+						value: value,
 						variablesReference: this.currentVarRef
-					});
+					};
+					vs.push(newVar);
+					this.parentVarsMap.set(this.currentVarRef, newVar);
 					await this.parseDumper(varDump.slice(1, -1));
 				}
 			} else {
@@ -413,13 +418,14 @@ export class PerlDebugSession extends LoggingDebugSession {
 
 	// Regexp for parsing the output of Data::Dumper
 	private isScalar = /"?(.*)"?\s=>?\s(undef|".*"|-?\d+|\[\]|\{\}|bless\(.*\)|sub\s\{.*\})[,|;]/;
-	private isNewNested = /"?(.*)"?\s=>?\s(bless\(\s)?(\[|\{)/;
+	private isNewNested = /"(.*)"\s=>?\s(bless\(\s)?(\[|\{)/;
 	private isNestedArrayPosition = /^(\{|\[)$/;
 	private isArrayPosition = /^(undef|".*"|-?\d+|\[\]|\{\}|bless\(.*\)|sub\s\{.*\})[,|;]/;
-	private isVarEnd = /^(\}|\]),?(\s?'(.*)'\s\))?,/;
+	private isVarEnd = /^(\}|\]),?(\s?'(.*)'\s\))?[,|;]/;
 	// Parse output of Data::Dumper
-	private async parseDumper(lines: string[]): Promise<number> {
+	private async parseDumper(lines: string[]): Promise<[number, string]> {
 		let cv: Variable[] = [];
+		let varType = "";
 		let arrayIndex = 0;
 		const ref = this.currentVarRef;
 		this.currentVarRef--;
@@ -427,10 +433,12 @@ export class PerlDebugSession extends LoggingDebugSession {
 		let i: number;
 		for (i = 0; i < lines.length; i++) {
 			const line = lines[i].trim();
-			if (line.match(this.isVarEnd) || line === '}') {
+			let matched = line.match(this.isVarEnd);
+			if (matched) {
+				varType = `${(matched[1] === '}' ? 'HASH' : 'ARRAY')}${(matched[3] ? ` ${matched[3]}` : '')}`;
 				break;
 			} else {
-				let matched = line.match(this.isScalar);
+				matched = line.match(this.isScalar);
 				if (matched) {
 					cv.push({
 						name: matched[1].replace(/"/, ''),
@@ -451,38 +459,73 @@ export class PerlDebugSession extends LoggingDebugSession {
 				}
 				matched = line.match(this.isNestedArrayPosition);
 				if (matched) {
-					cv.push({
+					const newVar: Variable = {
 						name: `${arrayIndex}`,
 						value: '',
 						variablesReference: this.currentVarRef
-					});
-					const newIndex = await this.parseDumper(lines.slice(i + 1));
-					i += newIndex;
+					};
+					const parsed = await this.parseDumper(lines.slice(i + 1));
+					i += parsed[0];
+					newVar.value = parsed[1];
+					cv.push(newVar);
+					this.parentVarsMap.set(ref, newVar);
 					arrayIndex++;
 					continue;
 				}
 				matched = line.match(this.isNewNested);
 				if (matched) {
-					cv.push({
+					const newVar: Variable = {
 						name: matched[1],
 						value: '',
 						variablesReference: this.currentVarRef
-					});
-					const newIndex = await this.parseDumper(lines.slice(i + 1));
-					i += newIndex;
+					};
+					const parsed = await this.parseDumper(lines.slice(i + 1));
+					i += parsed[0];
+					newVar.value = parsed[1];
+					cv.push(newVar);
+					this.parentVarsMap.set(ref, newVar);
 					continue;
 				}
 				logger.error(`Error: ${line}`);
 			}
 		}
-		this.varsMap.set(ref, cv);
-		return i + 1;
+		this.childVarsMap.set(ref, cv);
+		return [i + 1, varType];
 	}
 
-	protected setVariableRequest(response: DebugProtocol.SetVariableResponse, args: DebugProtocol.SetVariableArguments): void {
-		// TODO: Check variable and value type
-		this._runtime.request(`${args.name} = ${args.value}`);
-		response.body = { value: `${args.value}` };
+	protected async setVariableRequest(response: DebugProtocol.SetVariableResponse, args: DebugProtocol.SetVariableArguments): Promise<void> {
+		let currentVarRef = args.variablesReference;
+		let parentVars: Variable[] = [];
+		let expressionToChange = args.name;
+		while (true) {
+			const parent = this.parentVarsMap.get(currentVarRef);
+			if (parent) {
+				parentVars.push(parent);
+				switch (parent.value.match(/^(ARRAY|HASH)/)![1]) {
+					case 'ARRAY':
+						expressionToChange = `${parent.name}[${expressionToChange}]`;
+						break;
+					case 'HASH':
+						expressionToChange = `${parent.name.replace(/^%/, '$')}{${expressionToChange}}`;
+						break;
+					default:
+						logger.error(`Unknown variable Type: ${parent.value}`);
+						break;
+				}
+				// Maybe we need a minus
+				currentVarRef++;
+			}
+			else {
+				break;
+			}
+		}
+		const lines = await this._runtime.request(`${expressionToChange} = ${args.value}`);
+		if (lines.slice(1, -1).length > 0) {
+			this.sendEvent(new OutputEvent(`Error setting value: ${lines.join(' ')}`, 'important'));
+			response.success = false;
+		} else {
+			response.body = { value: `${args.value}` };
+		}
 		this.sendResponse(response);
 	}
 
