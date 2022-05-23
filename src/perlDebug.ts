@@ -10,9 +10,9 @@ import { ansiSeq, StreamCatcher } from './streamCatcher';
 
 export interface ILaunchRequestArguments extends DebugProtocol.LaunchRequestArguments {
 	program: string;
-	debug: boolean;
 	stopOnEntry: boolean;
 	perlExecutable?: string;
+	debug?: boolean;
 	cwd?: string;
 	args?: string[];
 	env?: object[];
@@ -232,7 +232,7 @@ export class PerlDebugSession extends LoggingDebugSession {
 		);
 
 		// does the user want to debug the script or just run it?
-		if (args.debug) {
+		if (args.debug === true || args.debug === undefined) {
 			logger.log('Starting Debug');
 			// use PadWalker to access variables in scope and JSON the send data to perlDebug.ts
 			let lines = await this.request('use PadWalker qw/peek_our peek_my/; use Data::Dumper;');
