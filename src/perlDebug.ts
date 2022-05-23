@@ -4,8 +4,9 @@ import {
 } from '@vscode/debugadapter';
 import { DebugProtocol } from '@vscode/debugprotocol';
 import { Subject } from 'await-notify';
+import { ChildProcess, spawn, SpawnOptions } from 'child_process';
 import { basename, dirname, join } from 'path';
-import { PerlRuntimeWrapper } from './perlRuntimeWrapper';
+import { ansiSeq, StreamCatcher } from './streamCatcher';
 
 export interface ILaunchRequestArguments extends DebugProtocol.LaunchRequestArguments {
 	program: string;
@@ -29,14 +30,17 @@ export interface IBreakpointData {
 	condition: string;
 }
 
+export interface IRuntimeBreakpoint {
+	line: number;
+	verified: boolean;
+}
+
 export class PerlDebugSession extends LoggingDebugSession {
 	private static threadId = 1;
 	private currentVarRef = 999;
 	private currentBreakpointID = 1;
 
 	private _configurationDone = new Subject();
-
-	private _runtime: PerlRuntimeWrapper;
 
 	private _variableHandles = new Handles<'my' | 'our' | 'special'>();
 	private childVarsMap = new Map<number, Variable[]>();
@@ -45,36 +49,73 @@ export class PerlDebugSession extends LoggingDebugSession {
 	private funcBps: IFunctionBreakpointData[] = [];
 	private cwd: string = "";
 
+	// the perl cli session
+	private _session!: ChildProcess;
+	// helper to run commands and parse output
+	private streamCatcher: StreamCatcher = new StreamCatcher;
+	// max tries to set a breakpoint
+	private maxBreakpointTries: number = 10;
+
 	public constructor() {
 		super("perl-debug.txt");
 
-		this._runtime = new PerlRuntimeWrapper();
-
 		this.setDebuggerLinesStartAt1(false);
 		this.setDebuggerColumnsStartAt1(false);
+	}
 
-		// setup event handlers
-		this._runtime.on('stopOnEntry', () => {
-			this.sendEvent(new StoppedEvent('entry', PerlDebugSession.threadId));
-		});
-		this._runtime.on('stopOnStep', () => {
-			this.sendEvent(new StoppedEvent('step', PerlDebugSession.threadId));
-		});
-		this._runtime.on('stopOnBreakpoint', () => {
-			this.sendEvent(new StoppedEvent('breakpoint', PerlDebugSession.threadId));
-		});
-		this._runtime.on('breakpointValidated', (bp: [number, number]) => {
-			this.sendEvent(new BreakpointEvent('changed', { verified: true, id: bp[0], line: bp[1] } as DebugProtocol.Breakpoint));
-		});
-		this._runtime.on('breakpointDeleted', (bpId: number) => {
-			this.sendEvent(new BreakpointEvent('removed', { id: bpId } as DebugProtocol.Breakpoint));
-		});
-		this._runtime.on('output', (text: string, category: 'console' | 'important' | 'stdout' | 'stderr' | 'telemetry' = 'console') => {
-			this.sendEvent(new OutputEvent(`${text}`, category));
-		});
-		this._runtime.on('end', () => {
+	/**
+	 * This function is used to send commands to the perl5db-process
+	 * and receive the output of it.
+	 */
+	async request(command: string): Promise<string[]> {
+		logger.log(`Command: ${command}`);
+		return (await this.streamCatcher.request(command)).filter(e => { return e !== ''; });
+	}
+
+	/**
+	 * This function normalizes paths depending on the OS the debugger is running on.
+	 */
+	private normalizePathAndCasing(path: string) {
+		if (process.platform === 'win32') {
+			return path.replace(/\//g, '\\').toLowerCase();
+		} else {
+			return path.replace(/\\/g, '/');
+		}
+	}
+
+	/**
+	 * Checks if the perl5db-runtime is currently active.
+	 */
+	public isActive(): boolean {
+		const type = typeof this.streamCatcher.input;
+		if (type !== 'undefined' && this.streamCatcher.input) {
+			return true;
+		} else {
+			return false;
+		}
+	}
+
+	/**
+	 * This function is called after every step to check if we reached the script end or an error.
+	 */
+	private async isEnd(lines: string[], event: string): Promise<boolean> {
+		const text = lines.join();
+
+		if (text.includes('Debugged program terminated.')) {
+			// did the script die?
+			const index = lines.findIndex(e => {
+				return e.includes('Debugged program terminated.');
+			});
+			lines = lines.slice(1, index);
+			this.sendEvent(new OutputEvent(lines.join('\n')));
+			// ensure that every script output is send to the debug console before closing the session
+			await this.request('sleep(.5)');
 			this.sendEvent(new TerminatedEvent());
-		});
+			return true;
+		}
+
+		this.sendEvent(new StoppedEvent(event, PerlDebugSession.threadId));;
+		return false;
 	}
 
 	/**
@@ -138,16 +179,121 @@ export class PerlDebugSession extends LoggingDebugSession {
 		await this._configurationDone.wait(1000);
 
 		// start the program in the runtime
-		await this._runtime.start(
-			args.perlExecutable || 'perl',
+		// Spawn perl process and handle errors
+		args.cwd = this.normalizePathAndCasing(args.cwd || dirname(args.program));
+		logger.log(`CWD: ${args.cwd}`);
+		logger.log(`ENV: ${JSON.stringify(process.env)}`);
+		const spawnOptions: SpawnOptions = {
+			detached: true,
+			cwd: args.cwd,
+			env: {
+				...process.env,
+				// eslint-disable-next-line @typescript-eslint/naming-convention
+				COLUMNS: '80',
+				// eslint-disable-next-line @typescript-eslint/naming-convention
+				LINES: '25',
+				// eslint-disable-next-line @typescript-eslint/naming-convention
+				TERM: 'dumb'
+			},
+		};
+
+		args.program = this.normalizePathAndCasing(args.program);
+		logger.log(`Script: ${args.program}`);
+		const commandArgs = [
+			'-d',
 			args.program,
-			!!args.stopOnEntry,
-			args.debug || true,
-			args.args || [],
-			this.bps,
-			this.funcBps,
-			this.cwd
+			...args.args || []
+		];
+
+		args.perlExecutable = args.perlExecutable || 'perl';
+		logger.log(`Perl executable: ${args.perlExecutable}`);
+		this._session = spawn(
+			args.perlExecutable,
+			commandArgs,
+			spawnOptions
 		);
+
+		this._session.on('error', err => {
+			logger.error(`Couldn't start the Debugger! ${err.name} : ${err.message}`);
+			this.sendEvent(new OutputEvent(`Couldn't start the Debugger! ${err.name} : ${err.message}`, 'stderr'));
+			this.sendEvent(new TerminatedEvent());
+			return;
+		});
+
+		// save the last output in case of an error
+		let output: string = "";
+		this._session.stderr!.on('data', (data) => {
+			output = data.toString();
+		});
+
+		this._session.on('exit', code => {
+			// print the error if we can not start the debugger
+			logger.error(`Could not start the debugging session! Code: ${code}\n${output}`);
+			this.sendEvent(new TerminatedEvent());
+			return;
+		});
+
+		// send the script output to the debug console
+		this._session.stdout!.on('data', (data) => {
+			this.sendEvent(new OutputEvent(data.toString().replace(ansiSeq, ''), 'stdout'));
+		});
+
+		await this.streamCatcher.launch(
+			this._session.stdin!,
+			this._session.stderr!
+		);
+
+		// does the user want to debug the script or just run it?
+		if (args.debug) {
+			logger.log('Starting Debug');
+			// use PadWalker to access variables in scope and JSON the send data to perlDebug.ts
+			let lines = await this.request('use PadWalker qw/peek_our peek_my/; use Data::Dumper;');
+			if (lines.join().includes('Can\'t locate')) {
+				this.sendEvent(new OutputEvent(`Could not start the perl5db:\n${lines.join('\n')}`, 'important'));
+				this.sendEvent(new TerminatedEvent());
+			}
+			// set breakpoints
+			for (let i = 0; i < this.bps.length; i++) {
+				const id = this.bps[i].id;
+				const file = this.normalizePathAndCasing(this.bps[i].file);
+				const condition = this.bps[i].condition;
+				let line = this.bps[i].line;
+				let success = false;
+				// try to set the breakpoint
+				for (let tries = 0; success === false && tries < this.maxBreakpointTries; tries++) {
+					// try to set the breakpoint
+					const data = (await this.request(`b ${file}:${line} ${condition}`)).join("");
+					if (data.includes('not breakable')) {
+						// try again at the next line
+						line++;
+					} else {
+						// a breakable line was found and the breakpoint set
+						this.sendEvent(new BreakpointEvent('changed', { verified: true, id: id, line: line } as DebugProtocol.Breakpoint));
+						success = true;
+					}
+				}
+			}
+			// set function breakpoints
+			for (let i = 0; i < this.funcBps.length; i++) {
+				const bp = this.funcBps[i];
+				const data = (await this.request(`b ${bp.name} ${bp.condition}`))[1];
+				if (data.includes('not found')) {
+					this.sendEvent(new OutputEvent(`Could not set function breakpoint:\n${data}`, 'important'));
+				}
+			}
+
+			logger.log(`StopOnEntry: ${args.stopOnEntry}`);
+			if (args.stopOnEntry) {
+				this.sendEvent(new StoppedEvent('entry', PerlDebugSession.threadId));
+			} else {
+				await this.continue();
+			}
+		} else {
+			// Just run
+			logger.log('Running script');
+			await this.continue();
+		}
+
 		this.sendResponse(response);
 	}
 
@@ -163,15 +309,15 @@ export class PerlDebugSession extends LoggingDebugSession {
 			let success = false;
 
 			// this is only possible if the runtime is currently active
-			if (this._runtime.isActive()) {
+			if (this.isActive()) {
 				// first we clear all existing breakpoints
 				for (let i = 0; i < this.bps.length; i++) {
 					const bp = this.bps[i];
-					await this._runtime.request(`B ${bp.line}`);
+					await this.request(`B ${bp.line}`);
 				}
 				// now we try to set every breakpoint requested
 				for (let tries = 0; success === false && tries < 15; tries++) {
-					const data = (await this._runtime.request(`b ${args.source.path}:${line} ${argBps[i].condition}`)).join();
+					const data = (await this.request(`b ${args.source.path}:${line} ${argBps[i].condition}`)).join();
 					if (data.includes('not breakable')) {
 						// try again at the next line
 						line++;
@@ -213,9 +359,8 @@ export class PerlDebugSession extends LoggingDebugSession {
 			});
 
 			// this is only possible if the runtime is currently active
-			if (this._runtime.isActive()) {
-				await this._runtime.request(`b ${bp.name} ${bp.condition}`);
-
+			if (this.isActive()) {
+				await this.request(`b ${bp.name} ${bp.condition}`);
 			} else {
 				logger.warn('Can not set function breakpoint. Runtime is not active yet');
 			}
@@ -239,7 +384,7 @@ export class PerlDebugSession extends LoggingDebugSession {
 		let stackFrames: StackFrame[] = [];
 		const stackTrace = /^[@|.]\s=\s(.*)\scalled\sfrom\sfile\s'(.*)'\sline\s(\d+)/;
 
-		const lines = (await this._runtime.request('T')).slice(1, -1);
+		const lines = (await this.request('T')).slice(1, -1);
 		for (let i = 0; i < lines.length; i++) {
 			const line = lines[i];
 			const matched = line.match(stackTrace);
@@ -248,7 +393,7 @@ export class PerlDebugSession extends LoggingDebugSession {
 				if (file.includes('./')) {
 					file = join(this.cwd, file);
 				}
-				file = this._runtime.normalizePathAndCasing(matched[2]);
+				file = this.normalizePathAndCasing(matched[2]);
 				const fn = new Source(basename(file), file);
 				stackFrames.push(new StackFrame(i, matched[1], fn, +matched[3]));
 			}
@@ -284,11 +429,11 @@ export class PerlDebugSession extends LoggingDebugSession {
 		// < 1000 => nested vars
 		if (args.variablesReference >= 1000) {
 			if (handle === 'my') {
-				vars = (await this._runtime.request(`print STDERR join ('|', sort(keys( % { PadWalker::peek_my(2); })))`))[1].split('|');
+				vars = (await this.request(`print STDERR join ('|', sort(keys( % { PadWalker::peek_my(2); })))`))[1].split('|');
 				logger.log(`Varnames: ${vars.join(', ')}`);
 			}
 			if (handle === 'our') {
-				vars = (await this._runtime.request(`print STDERR join ('|', sort(keys( % { PadWalker::peek_our(2); })))`))[1].split('|');
+				vars = (await this.request(`print STDERR join ('|', sort(keys( % { PadWalker::peek_our(2); })))`))[1].split('|');
 				logger.log(`Varnames: ${vars.join(', ')}`);
 			}
 			else if (handle === 'special') {
@@ -381,7 +526,7 @@ export class PerlDebugSession extends LoggingDebugSession {
 				varName = `{${varName}}`;
 			}
 
-			let varDump = (await this._runtime.request(`print STDERR Data::Dumper->new([${varName}], [])->Deepcopy(1)->Sortkeys(1)->Indent(1)->Terse(0)->Trailingcomma(1)->Useqq(1)->Dump()`)).slice(1, -1);
+			let varDump = (await this.request(`print STDERR Data::Dumper->new([${varName}], [])->Deepcopy(1)->Sortkeys(1)->Indent(1)->Terse(0)->Trailingcomma(1)->Useqq(1)->Dump()`)).slice(1, -1);
 			try {
 				if (varDump[0]) {
 					varDump[0] = varDump[0].replace(/=/, '=>');
@@ -538,12 +683,12 @@ export class PerlDebugSession extends LoggingDebugSession {
 				}
 			}
 		}
-		const lines = await this._runtime.request(`${expressionToChange} = ${args.value}`);
+		const lines = await this.request(`${expressionToChange} = ${args.value}`);
 		if (lines.slice(1, -1).length > 0) {
 			this.sendEvent(new OutputEvent(`Error setting value: ${lines.join(' ')}`, 'important'));
 			response.success = false;
 		} else {
-			const value = (await this._runtime.request(`print STDERR Data::Dumper->new([${(expressionToChange.startsWith('@') ? `[${expressionToChange}]` : (expressionToChange.startsWith('%') ? `{${expressionToChange}}` : expressionToChange))}], [])->Useqq(1)->Terse(1)->Dump()`)).slice(1, -1).join(' ');
+			const value = (await this.request(`print STDERR Data::Dumper->new([${(expressionToChange.startsWith('@') ? `[${expressionToChange}]` : (expressionToChange.startsWith('%') ? `{${expressionToChange}}` : expressionToChange))}], [])->Useqq(1)->Terse(1)->Dump()`)).slice(1, -1).join(' ');
 			response.body = { value: `${value}` };
 		}
 		this.sendResponse(response);
@@ -552,7 +697,7 @@ export class PerlDebugSession extends LoggingDebugSession {
 	protected async loadedSourcesRequest(response: DebugProtocol.LoadedSourcesResponse, args: DebugProtocol.LoadedSourcesArguments, request?: DebugProtocol.Request): Promise<void> {
 		let sources: Source[] = [];
 
-		const lines = await this._runtime.request('foreach my $INCKEY (keys %INC) { print STDERR $INCKEY . "||" . %INC{$INCKEY} . "\\n" }');
+		const lines = await this.request('foreach my $INCKEY (keys %INC) { print STDERR $INCKEY . "||" . %INC{$INCKEY} . "\\n" }');
 		// remove first and last line
 		lines.slice(1, -1).forEach(line => {
 			const tmp = line.split('||');
@@ -568,34 +713,48 @@ export class PerlDebugSession extends LoggingDebugSession {
 		this.sendResponse(response);
 	}
 
+	public async continue() {
+		await this.isEnd(await this.request('c'), 'breakpoint');
+	}
+
+	public async step(signal: string = 'step') {
+		await this.isEnd(await this.request('n'), signal);
+	}
+
+	public async stepIn() {
+		await this.isEnd(await this.request('s'), 'step');
+	}
+
+	public async stepOut() {
+		await this.isEnd(await this.request('r'), 'step');
+	}
+
 	protected async continueRequest(response: DebugProtocol.ContinueResponse, args: DebugProtocol.ContinueArguments): Promise<void> {
-		await this._runtime.continue();
+		await this.continue();
 		this.sendResponse(response);
 	}
 
 	protected async nextRequest(response: DebugProtocol.NextResponse, args: DebugProtocol.NextArguments): Promise<void> {
-		await this._runtime.step();
+		await this.step();
 		this.sendResponse(response);
 	}
 
 	protected async stepInRequest(response: DebugProtocol.StepInResponse, args: DebugProtocol.StepInArguments): Promise<void> {
-		await this._runtime.stepIn();
+		await this.stepIn();
 		this.sendResponse(response);
 	}
 
 	protected async stepOutRequest(response: DebugProtocol.StepOutResponse, args: DebugProtocol.StepOutArguments, request?: DebugProtocol.Request): Promise<void> {
-		await this._runtime.stepOut();
+		await this.stepOut();
 		this.sendResponse(response);
 	}
 
 	protected async restartRequest(response: DebugProtocol.RestartResponse, args: DebugProtocol.RestartArguments, request?: DebugProtocol.Request): Promise<void> {
-		this._runtime.destroy();
 		this.sendResponse(response);
 	}
 
 	protected async terminateRequest(response: DebugProtocol.TerminateResponse, args: DebugProtocol.TerminateArguments, request?: DebugProtocol.Request): Promise<void> {
-		await this._runtime.request('q');
-		this._runtime.destroy();
+		await this.request('q');
 		this.sendResponse(response);
 	}
 }
