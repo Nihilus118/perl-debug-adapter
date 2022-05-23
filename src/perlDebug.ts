@@ -124,25 +124,13 @@ export class PerlDebugSession extends LoggingDebugSession {
 	 */
 	protected initializeRequest(response: DebugProtocol.InitializeResponse, args: DebugProtocol.InitializeRequestArguments): void {
 
-		// build and return the capabilities of this debug adapter:
 		response.body = response.body || {};
 
-		// the adapter implements the configurationDone request.
 		response.body.supportsConfigurationDoneRequest = true;
-
-		// make VS Code use 'evaluate' when hovering over source
 		response.body.supportsEvaluateForHovers = true;
-
-		// make VS Code support data breakpoints
 		response.body.supportsDataBreakpoints = true;
-
-		// make VS Code send setVariable request
 		response.body.supportsSetVariable = true;
-
-		// make VS Code send loadedSourcesRequest request
 		response.body.supportsLoadedSourcesRequest = true;
-
-		// make VS Code send SetFunctionBreakpointsRequest request
 		response.body.supportsFunctionBreakpoints = true;
 		response.body.supportsConditionalBreakpoints = true;
 
@@ -683,7 +671,7 @@ export class PerlDebugSession extends LoggingDebugSession {
 				}
 			}
 		}
-		const lines = await this.request(`${expressionToChange} = ${args.value}`);
+		const lines = (await this.request(`${expressionToChange} = ${args.value}`)).filter(e => { return e !== ''; });
 		if (lines.slice(1, -1).length > 0) {
 			this.sendEvent(new OutputEvent(`Error setting value: ${lines.join(' ')}`, 'important'));
 			response.success = false;
