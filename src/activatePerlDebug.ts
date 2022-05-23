@@ -16,7 +16,8 @@ export function activatePerlDebug(context: vscode.ExtensionContext, factory: vsc
 					type: 'perl',
 					name: 'Run File',
 					request: 'launch',
-					program: targetResource.fsPath
+					program: targetResource.fsPath,
+					debug: false
 				},
 					{ noDebug: true }
 				);
@@ -30,10 +31,11 @@ export function activatePerlDebug(context: vscode.ExtensionContext, factory: vsc
 			if (targetResource) {
 				vscode.debug.startDebugging(undefined, {
 					type: 'perl',
-					name: 'Debug File',
+					name: 'Run File',
 					request: 'launch',
 					program: targetResource.fsPath,
-					stopOnEntry: true
+					stopOnEntry: true,
+					debug: true
 				});
 			}
 		})

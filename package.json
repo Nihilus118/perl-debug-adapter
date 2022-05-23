@@ -55,12 +55,54 @@
   "main": "./dist/extension.js",
   "activationEvents": [
     "onDebugResolve:perl",
-    "onDebugDynamicConfigurations:perl"
+    "onDebugDynamicConfigurations:perl",
+    "onCommand:extension.perl-debug.debugEditorContents",
+    "onCommand:extension.perl-debug.runEditorContents"
   ],
   "workspaceTrust": {
     "request": "never"
   },
   "contributes": {
+    "menus": {
+      "editor/title/run": [
+        {
+          "command": "extension.perl-debug.debugEditorContents",
+          "when": "resourceLangId == perl",
+          "group": "navigation@1"
+        },
+        {
+          "command": "extension.perl-debug.runEditorContents",
+          "when": "resourceLangId == perl",
+          "group": "navigation@2"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "extension.perl-debug.debugEditorContents",
+          "when": "resourceLangId == perl"
+        },
+        {
+          "command": "extension.perl-debug.runEditorContents",
+          "when": "resourceLangId == perl"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "extension.perl-debug.debugEditorContents",
+        "title": "Debug Perl File",
+        "category": "Perl Debug",
+        "enablement": "!inDebugMode",
+        "icon": "$(debug-alt)"
+      },
+      {
+        "command": "extension.perl-debug.runEditorContents",
+        "title": "Run Perl File",
+        "category": "Perl Debug",
+        "enablement": "!inDebugMode",
+        "icon": "$(play)"
+      }
+    ],
     "breakpoints": [
       {
         "language": "perl"
