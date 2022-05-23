@@ -36,21 +36,8 @@ export function activatePerlDebug(context: vscode.ExtensionContext, factory: vsc
 					stopOnEntry: true
 				});
 			}
-		}),
-		vscode.commands.registerCommand('extension.perl-debug.toggleFormatting', () => {
-			const ds = vscode.debug.activeDebugSession;
-			if (ds) {
-				ds.customRequest('toggleFormatting');
-			}
 		})
 	);
-
-	context.subscriptions.push(vscode.commands.registerCommand('extension.perl-debug.getProgramName', () => {
-		return vscode.window.showInputBox({
-			placeHolder: "Please enter the name of a markdown file in the workspace folder",
-			value: "readme.md"
-		});
-	}));
 
 	const provider = new PerlConfigurationProvider();
 	context.subscriptions.push(vscode.debug.registerDebugConfigurationProvider('perl', provider));
@@ -75,7 +62,7 @@ export function activatePerlDebug(context: vscode.ExtensionContext, factory: vsc
 	context.subscriptions.push(vscode.languages.registerEvaluatableExpressionProvider('perl', {
 		provideEvaluatableExpression(document: vscode.TextDocument, position: vscode.Position): vscode.ProviderResult<vscode.EvaluatableExpression> {
 
-			const VARIABLE_REGEXP = /(\$|@|%)[a-z0-9_]*(([\{\[][\s"'_a-z0-9]*[\}|\]])+(\->)?)*/ig;
+			const VARIABLE_REGEXP = /((\$|@|%)[a-z0-9_]*(([\{\[][\s"'_a-z0-9]*[\}|\]])+(\->)?)*)/ig;
 			const line = document.lineAt(position.line).text;
 
 			let m: RegExpExecArray | null;
@@ -91,36 +78,30 @@ export function activatePerlDebug(context: vscode.ExtensionContext, factory: vsc
 	}));
 
 	// override VS Code's default implementation of the "inline values" feature"
-	// context.subscriptions.push(vscode.languages.registerInlineValuesProvider('perl', {
+	context.subscriptions.push(vscode.languages.registerInlineValuesProvider('perl', {
 
-	// 	provideInlineValues(document: vscode.TextDocument, viewport: vscode.Range, context: vscode.InlineValueContext): vscode.ProviderResult<vscode.InlineValue[]> {
+		provideInlineValues(document: vscode.TextDocument, viewport: vscode.Range, context: vscode.InlineValueContext): vscode.ProviderResult<vscode.InlineValue[]> {
 
-	// 		const allValues: vscode.InlineValue[] = [];
+			const allValues: vscode.InlineValue[] = [];
 
-	// 		for (let l = viewport.start.line; l <= context.stoppedLocation.end.line; l++) {
-	// 			const line = document.lineAt(l);
-	// 			var regExp = /\$([a-z][a-z0-9]*)/ig;	// variables are words starting with '$'
-	// 			do {
-	// 				var m = regExp.exec(line.text);
-	// 				if (m) {
-	// 					const varName = m[1];
-	// 					const varRange = new vscode.Range(l, m.index, l, m.index + varName.length);
+			for (let l = viewport.start.line; l <= context.stoppedLocation.end.line; l++) {
+				const line = document.lineAt(l);
+				var regExp = /((\$|@|%)[a-z0-9_]*(([\{\[][\s"'_a-z0-9]*[\}|\]])+(\->)?)*)/ig;	// variables are words starting with '$'
+				do {
+					var m = regExp.exec(line.text);
+					if (m) {
+						const varName = m[1];
+						const varRange = new vscode.Range(l, m.index, l, m.index + varName.length);
 
-	// 					// some literal text
-	// 					//allValues.push(new vscode.InlineValueText(varRange, `${varName}: ${viewport.start.line}`));
+						// value determined via expression evaluation
+						allValues.push(new vscode.InlineValueEvaluatableExpression(varRange, varName));
+					}
+				} while (m);
+			}
 
-	// 					// value found via variable lookup
-	// 					allValues.push(new vscode.InlineValueVariableLookup(varRange, varName, false));
-
-	// 					// value determined via expression evaluation
-	// 					//allValues.push(new vscode.InlineValueEvaluatableExpression(varRange, varName));
-	// 				}
-	// 			} while (m);
-	// 		}
-
-	// 		return allValues;
-	// 	}
-	// }));
+			return allValues;
+		}
+	}));
 }
 
 class PerlConfigurationProvider implements vscode.DebugConfigurationProvider {
