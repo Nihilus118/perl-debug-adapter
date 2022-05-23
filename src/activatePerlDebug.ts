@@ -72,23 +72,23 @@ export function activatePerlDebug(context: vscode.ExtensionContext, factory: vsc
 
 	context.subscriptions.push(vscode.debug.registerDebugAdapterDescriptorFactory('perl', factory));
 
-	// context.subscriptions.push(vscode.languages.registerEvaluatableExpressionProvider('perl', {
-	// 	provideEvaluatableExpression(document: vscode.TextDocument, position: vscode.Position): vscode.ProviderResult<vscode.EvaluatableExpression> {
+	context.subscriptions.push(vscode.languages.registerEvaluatableExpressionProvider('perl', {
+		provideEvaluatableExpression(document: vscode.TextDocument, position: vscode.Position): vscode.ProviderResult<vscode.EvaluatableExpression> {
 
-	// 		const VARIABLE_REGEXP = /\$[a-z][a-z0-9]*/ig;
-	// 		const line = document.lineAt(position.line).text;
+			const VARIABLE_REGEXP = /(\$|@|%)[a-z0-9_]*(([\{\[][\s"'_a-z0-9]*[\}|\]])+(\->)?)*/ig;
+			const line = document.lineAt(position.line).text;
 
-	// 		let m: RegExpExecArray | null;
-	// 		while (m = VARIABLE_REGEXP.exec(line)) {
-	// 			const varRange = new vscode.Range(position.line, m.index, position.line, m.index + m[0].length);
+			let m: RegExpExecArray | null;
+			while (m = VARIABLE_REGEXP.exec(line)) {
+				const varRange = new vscode.Range(position.line, m.index, position.line, m.index + m[0].length);
 
-	// 			if (varRange.contains(position)) {
-	// 				return new vscode.EvaluatableExpression(varRange);
-	// 			}
-	// 		}
-	// 		return undefined;
-	// 	}
-	// }));
+				if (varRange.contains(position)) {
+					return new vscode.EvaluatableExpression(varRange);
+				}
+			}
+			return undefined;
+		}
+	}));
 
 	// override VS Code's default implementation of the "inline values" feature"
 	// context.subscriptions.push(vscode.languages.registerInlineValuesProvider('perl', {
