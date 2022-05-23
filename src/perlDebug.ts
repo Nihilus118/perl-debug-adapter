@@ -69,7 +69,7 @@ export class PerlDebugSession extends LoggingDebugSession {
 	 */
 	async request(command: string): Promise<string[]> {
 		logger.log(`Command: ${command}`);
-		return (await this.streamCatcher.request(command)).filter(e => { return e !== ''; });
+		return (await this.streamCatcher.request(command));
 	}
 
 	/**
@@ -526,7 +526,7 @@ export class PerlDebugSession extends LoggingDebugSession {
 				varName = `{${varName}}`;
 			}
 
-			let varDump = (await this.request(`print STDERR Data::Dumper->new([${varName}], [])->Deepcopy(1)->Sortkeys(1)->Indent(1)->Terse(0)->Trailingcomma(1)->Useqq(1)->Dump()`)).slice(1, -1);
+			let varDump = (await this.request(`print STDERR Data::Dumper->new([${varName}], [])->Deepcopy(1)->Sortkeys(1)->Indent(1)->Terse(0)->Trailingcomma(1)->Useqq(1)->Dump()`)).filter(e => { return e !== ''; }).slice(1, -1);
 			try {
 				if (varDump[0]) {
 					varDump[0] = varDump[0].replace(/=/, '=>');
@@ -699,7 +699,7 @@ export class PerlDebugSession extends LoggingDebugSession {
 
 		const lines = await this.request('foreach my $INCKEY (keys %INC) { print STDERR $INCKEY . "||" . %INC{$INCKEY} . "\\n" }');
 		// remove first and last line
-		lines.slice(1, -1).forEach(line => {
+		lines.filter(e => { return e !== ''; }).slice(1, -1).forEach(line => {
 			const tmp = line.split('||');
 			if (tmp.length === 2) {
 				sources.push(new Source(tmp[0], tmp[1].replace(/^\.\//, `${this.cwd}/`)));
@@ -714,19 +714,39 @@ export class PerlDebugSession extends LoggingDebugSession {
 	}
 
 	public async continue() {
-		await this.isEnd(await this.request('c'), 'breakpoint');
+		const lines = await this.request('c');
+		const scriptOutput = lines.slice(1, lines.findIndex(e => { return e.match(/main::.*|Debugged program terminated/); }));
+		if (scriptOutput.filter(e => { return e !== ''; }).length > 0) {
+			this.sendEvent(new OutputEvent(scriptOutput.join('\n'), 'stderr'));
+		}
+		await this.isEnd(lines, 'breakpoint');
 	}
 
 	public async step(signal: string = 'step') {
-		await this.isEnd(await this.request('n'), signal);
+		const lines = await this.request('n');
+		const scriptOutput = lines.slice(1, lines.findIndex(e => { return e.match(/main::.*|Debugged program terminated/); }));
+		if (scriptOutput.filter(e => { return e !== ''; }).length > 0) {
+			this.sendEvent(new OutputEvent(scriptOutput.join('\n'), 'stderr'));
+		}
+		await this.isEnd(lines, signal);
 	}
 
 	public async stepIn() {
-		await this.isEnd(await this.request('s'), 'step');
+		const lines = await this.request('s');
+		const scriptOutput = lines.slice(1, lines.findIndex(e => { return e.match(/main::.*|Debugged program terminated/); }));
+		if (scriptOutput.filter(e => { return e !== ''; }).length > 0) {
+			this.sendEvent(new OutputEvent(scriptOutput.join('\n'), 'stderr'));
+		}
+		await this.isEnd(lines, 'step');
 	}
 
 	public async stepOut() {
-		await this.isEnd(await this.request('r'), 'step');
+		const lines = await this.request('r');
+		const scriptOutput = lines.slice(1, lines.findIndex(e => { return e.match(/main::.*|Debugged program terminated/); }));
+		if (scriptOutput.filter(e => { return e !== ''; }).length > 0) {
+			this.sendEvent(new OutputEvent(scriptOutput.join('\n'), 'stderr'));
+		}
+		await this.isEnd(lines, 'step');
 	}
 
 	protected async continueRequest(response: DebugProtocol.ContinueResponse, args: DebugProtocol.ContinueArguments): Promise<void> {
@@ -750,11 +770,13 @@ export class PerlDebugSession extends LoggingDebugSession {
 	}
 
 	protected async restartRequest(response: DebugProtocol.RestartResponse, args: DebugProtocol.RestartArguments, request?: DebugProtocol.Request): Promise<void> {
+		await this.streamCatcher.destroy();
 		this.sendResponse(response);
 	}
 
 	protected async terminateRequest(response: DebugProtocol.TerminateResponse, args: DebugProtocol.TerminateArguments, request?: DebugProtocol.Request): Promise<void> {
 		await this.request('q');
+		await this.streamCatcher.destroy();
 		this.sendResponse(response);
 	}
 }

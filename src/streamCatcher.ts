@@ -30,7 +30,6 @@ interface RequestTask {
 }
 
 export class StreamCatcher extends EventEmitter {
-    public debug: boolean = false;
     private requestQueue: RequestTask[] = [];
     private requestRunning: RequestTask | null = null;
 
