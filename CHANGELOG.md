@@ -12,3 +12,7 @@
 ## 0.0.3
 * Fix a variable parsing bug
 * Change the values of nested variables
+* Show inline values while debugging
+* Improved evaluation of hover
+* Commands to run and debug a perl script
+* Buttons to run and debug a perl script
