@@ -382,34 +382,38 @@ export class PerlDebugSession extends LoggingDebugSession {
 			}
 
 			let varDump = (await this._runtime.request(`print STDERR Data::Dumper->new([${varName}], [])->Deepcopy(1)->Sortkeys(1)->Indent(1)->Terse(0)->Trailingcomma(1)->Useqq(1)->Dump()`)).slice(1, -1);
-			if (varDump[0]) {
-				varDump[0] = varDump[0].replace(/=/, '=>');
-				const matched = varDump[0].match(this.isScalar);
-				if (matched && varDump.length === 1) {
+			try {
+				if (varDump[0]) {
+					varDump[0] = varDump[0].replace(/=/, '=>');
+					const matched = varDump[0].match(this.isScalar);
+					if (matched && varDump.length === 1) {
+						vs.push({
+							name: varNames[i],
+							value: `${matched[2]}`,
+							variablesReference: 0
+						});
+					} else {
+						this.currentVarRef--;
+						const matched = varDump[varDump.length - 1].trim().match(this.isVarEnd);
+						const value = `${(matched![1] === '}' ? 'HASH' : 'ARRAY')}${(matched![3] ? ` ${matched![3]}` : '')}`;
+						const newVar: Variable = {
+							name: varNames[i],
+							value: value,
+							variablesReference: this.currentVarRef
+						};
+						vs.push(newVar);
+						this.parentVarsMap.set(this.currentVarRef, newVar);
+						await this.parseDumper(varDump.slice(1, -1));
+					}
+				} else {
 					vs.push({
 						name: varNames[i],
-						value: `${matched[2]}`,
+						value: 'undef',
 						variablesReference: 0
 					});
-				} else {
-					this.currentVarRef--;
-					const matched = varDump[varDump.length - 1].trim().match(this.isVarEnd);
-					const value = `${(matched![1] === '}' ? 'HASH' : 'ARRAY')}${(matched![3] ? ` ${matched![3]}` : '')}`;
-					const newVar: Variable = {
-						name: varNames[i],
-						value: value,
-						variablesReference: this.currentVarRef
-					};
-					vs.push(newVar);
-					this.parentVarsMap.set(this.currentVarRef, newVar);
-					await this.parseDumper(varDump.slice(1, -1));
 				}
-			} else {
-				vs.push({
-					name: varNames[i],
-					value: 'undef',
-					variablesReference: 0
-				});
+			} catch (error) {
+				this.sendEvent(new OutputEvent(`Error parsing variable ${varNames[i]}!\nDump: ${varDump.join(' ')}\nError:${error}`, 'important'));
 			}
 		}
 
@@ -418,7 +422,7 @@ export class PerlDebugSession extends LoggingDebugSession {
 	}
 
 	// Regexp for parsing the output of Data::Dumper
-	private isScalar = /"?(.*)"?\s=>?\s(undef|".*"|-?\d+|\[\]|\{\}|bless\(.*\)|sub\s\{.*\})[,|;]/;
+	private isScalar = /"?(.*)"?\s=>?\s(undef|".*"|-?\d+|\[\]|\{\}|bless\(.*\)|sub\s\{.*\}|\\\*\{".*\"})[,|;]/;
 	private isNewNested = /"(.*)"\s=>?\s(bless\(\s)?(\[|\{)/;
 	private isNestedArrayPosition = /^(\{|\[)$/;
 	private isArrayPosition = /^(undef|".*"|-?\d+|\[\]|\{\}|bless\(.*\)|sub\s\{.*\})[,|;]/;
