@@ -226,7 +226,7 @@ export class PerlDebugSession extends LoggingDebugSession {
 			// use PadWalker to access variables in scope and JSON the send data to perlDebug.ts
 			let lines = await this.request('use PadWalker qw/peek_our peek_my/; use Data::Dumper;');
 			if (lines.join().includes('Can\'t locate')) {
-				this.sendEvent(new OutputEvent(`Could not start the perl5db:\n${lines.join('\n')}`, 'important'));
+				this.sendEvent(new OutputEvent(`Could not load requited modules:\n${lines.join('\n')}`, 'important'));
 				this.sendEvent(new TerminatedEvent());
 			}
 			// set breakpoints
