@@ -545,8 +545,13 @@ export class PerlDebugSession extends LoggingDebugSession {
 						variablesReference: 0
 					});
 				}
-			} catch (error) {
-				this.sendEvent(new OutputEvent(`Error parsing variable ${varNames[i]}!\nDump: ${varDump.join(' ')}\nError:${error}`, 'important'));
+			} catch (error: any) {
+				logger.error(`Error parsing variable ${varNames[i]}: ${error}`);
+				vs.push({
+					name: varNames[i],
+					value: 'undef',
+					variablesReference: 0
+				});
 			}
 		}
 

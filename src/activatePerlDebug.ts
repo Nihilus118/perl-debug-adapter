@@ -3,6 +3,8 @@
 import * as vscode from 'vscode';
 import { DebugConfiguration, ProviderResult, WorkspaceFolder } from 'vscode';
 
+const VARIABLE_REGEXP = /(\$|@|%)[a-z0-9_]+((\->)?(\{"[a-z0-9_\s]+"\}|\{'[a-z0-9_\s]+'\}|\[\d+\]|\{\$[a-z0-9_]+\}|::[a-z0-9_]+))*/gi;
+
 export function activatePerlDebug(context: vscode.ExtensionContext, factory: vscode.DebugAdapterDescriptorFactory) {
 
 	context.subscriptions.push(
@@ -64,7 +66,6 @@ export function activatePerlDebug(context: vscode.ExtensionContext, factory: vsc
 	context.subscriptions.push(vscode.languages.registerEvaluatableExpressionProvider('perl', {
 		provideEvaluatableExpression(document: vscode.TextDocument, position: vscode.Position): vscode.ProviderResult<vscode.EvaluatableExpression> {
 
-			const VARIABLE_REGEXP = /((\$|@|%)[a-z0-9_]*(([\{\[][\s"'_a-z0-9]*[\}|\]])+(\->)?)*)/ig;
 			const line = document.lineAt(position.line).text;
 
 			let m: RegExpExecArray | null;
@@ -88,11 +89,10 @@ export function activatePerlDebug(context: vscode.ExtensionContext, factory: vsc
 
 			for (let l = viewport.start.line; l <= context.stoppedLocation.end.line; l++) {
 				const line = document.lineAt(l);
-				var regExp = /((\$|@|%)[a-z0-9_]*(([\{\[][\s"'_a-z0-9]*[\}|\]])+(\->)?)*)/ig;	// variables are words starting with '$'
 				do {
-					var m = regExp.exec(line.text);
+					var m = VARIABLE_REGEXP.exec(line.text);
 					if (m) {
-						const varName = m[1];
+						const varName = m[0];
 						const varRange = new vscode.Range(l, m.index, l, m.index + varName.length);
 
 						// value determined via expression evaluation
