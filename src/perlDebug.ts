@@ -98,24 +98,17 @@ export class PerlDebugSession extends LoggingDebugSession {
 	/**
 	 * This function is called after every step to check if we reached the script end or an error.
 	 */
-	private async isEnd(lines: string[], event: string): Promise<boolean> {
+	private async isEnd(lines: string[], event: string) {
 		const text = lines.join();
 
+		// did the script die?
 		if (text.includes('Debugged program terminated.')) {
-			// did the script die?
-			const index = lines.findIndex(e => {
-				return e.includes('Debugged program terminated.');
-			});
-			lines = lines.slice(1, index);
-			this.sendEvent(new OutputEvent(lines.join('\n')));
 			// ensure that every script output is send to the debug console before closing the session
 			await this.request('sleep(.5)');
 			this.sendEvent(new TerminatedEvent());
-			return true;
 		}
 
 		this.sendEvent(new StoppedEvent(event, PerlDebugSession.threadId));;
-		return false;
 	}
 
 	/**
@@ -202,21 +195,17 @@ export class PerlDebugSession extends LoggingDebugSession {
 		);
 
 		this._session.on('error', err => {
-			logger.error(`Couldn't start the Debugger! ${err.name} : ${err.message}`);
-			this.sendEvent(new OutputEvent(`Couldn't start the Debugger! ${err.name} : ${err.message}`, 'stderr'));
+			const text = `Couldn not spawn the child process! Command: ${args.perlExecutable}\nError: ${err.name} : ${err.message}`;
+			logger.error(text);
+			this.sendEvent(new OutputEvent(text, 'important'));
 			this.sendEvent(new TerminatedEvent());
 			return;
 		});
 
-		// save the last output in case of an error
-		let output: string = "";
-		this._session.stderr!.on('data', (data) => {
-			output = data.toString();
-		});
-
 		this._session.on('exit', code => {
-			// print the error if we can not start the debugger
-			logger.error(`Could not start the debugging session! Code: ${code}\n${output}`);
+			const text = `Could not start the debugging session! Script may contains errors. Code: ${code}`;
+			logger.error(text);
+			this.sendEvent(new OutputEvent(text, 'important'));
 			this.sendEvent(new TerminatedEvent());
 			return;
 		});
