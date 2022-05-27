@@ -80,7 +80,6 @@ export function activatePerlDebug(context: vscode.ExtensionContext, factory: vsc
 		}
 	}));
 
-	// override VS Code's default implementation of the "inline values" feature"
 	context.subscriptions.push(vscode.languages.registerInlineValuesProvider('perl', {
 
 		provideInlineValues(document: vscode.TextDocument, viewport: vscode.Range, context: vscode.InlineValueContext): vscode.ProviderResult<vscode.InlineValue[]> {
@@ -128,7 +127,7 @@ class PerlConfigurationProvider implements vscode.DebugConfigurationProvider {
 		}
 
 		if (!config.program) {
-			return vscode.window.showInformationMessage("Cannot find a program to debug").then(_ => {
+			return vscode.window.showInformationMessage('Cannot find a program to debug').then(_ => {
 				// abort launch
 				return undefined;
 			});

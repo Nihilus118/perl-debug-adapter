@@ -8,7 +8,7 @@ import { ChildProcess, spawn, SpawnOptions } from 'child_process';
 import { basename, dirname, join } from 'path';
 import { ansiSeq, StreamCatcher } from './streamCatcher';
 
-export interface ILaunchRequestArguments extends DebugProtocol.LaunchRequestArguments {
+interface ILaunchRequestArguments extends DebugProtocol.LaunchRequestArguments {
 	program: string;
 	stopOnEntry: boolean;
 	perlExecutable?: string;
@@ -18,21 +18,16 @@ export interface ILaunchRequestArguments extends DebugProtocol.LaunchRequestArgu
 	env?: object[];
 }
 
-export interface IFunctionBreakpointData {
+interface IFunctionBreakpointData {
 	name: string,
 	condition: string;
 }
 
-export interface IBreakpointData {
+interface IBreakpointData {
 	file: string,
 	line: number,
 	id: number,
 	condition: string;
-}
-
-export interface IRuntimeBreakpoint {
-	line: number;
-	verified: boolean;
 }
 
 export class PerlDebugSession extends LoggingDebugSession {
@@ -47,7 +42,7 @@ export class PerlDebugSession extends LoggingDebugSession {
 	private parentVarsMap = new Map<number, Variable>();
 	private bps: IBreakpointData[] = [];
 	private funcBps: IFunctionBreakpointData[] = [];
-	private cwd: string = "";
+	private cwd: string = '';
 
 	// the perl cli session
 	private _session!: ChildProcess;
@@ -57,7 +52,7 @@ export class PerlDebugSession extends LoggingDebugSession {
 	private maxBreakpointTries: number = 10;
 
 	public constructor() {
-		super("perl-debug.txt");
+		super('perl-debug.txt');
 
 		this.setDebuggerLinesStartAt1(false);
 		this.setDebuggerColumnsStartAt1(false);
@@ -195,7 +190,7 @@ export class PerlDebugSession extends LoggingDebugSession {
 		);
 
 		this._session.on('error', err => {
-			const text = `Couldn not spawn the child process! Command: ${args.perlExecutable}\nError: ${err.name} : ${err.message}`;
+			const text = `Couldn not spawn the child process! Command: ${args.perlExecutable}\nCode: ${err.name}\nError: ${err.message}`;
 			logger.error(text);
 			this.sendEvent(new OutputEvent(text, 'important'));
 			this.sendEvent(new TerminatedEvent());
@@ -203,9 +198,8 @@ export class PerlDebugSession extends LoggingDebugSession {
 		});
 
 		this._session.on('exit', code => {
-			const text = `Could not start the debugging session! Script may contains errors. Code: ${code}`;
-			logger.error(text);
-			this.sendEvent(new OutputEvent(text, 'important'));
+			const text = `Could not start the debugging session! Script may contains errors. Code: ${code}\nError: ${this.streamCatcher.getBuffer().join('\n')}`;
+			this.sendEvent(new OutputEvent(text, 'stderr'));
 			this.sendEvent(new TerminatedEvent());
 			return;
 		});
@@ -239,7 +233,7 @@ export class PerlDebugSession extends LoggingDebugSession {
 				// try to set the breakpoint
 				for (let tries = 0; success === false && tries < this.maxBreakpointTries; tries++) {
 					// try to set the breakpoint
-					const data = (await this.request(`b ${file}:${line} ${condition}`)).join("");
+					const data = (await this.request(`b ${file}:${line} ${condition}`)).join('');
 					if (data.includes('not breakable')) {
 						// try again at the next line
 						line++;
@@ -351,7 +345,7 @@ export class PerlDebugSession extends LoggingDebugSession {
 		// runtime supports no threads so just return a default thread.
 		response.body = {
 			threads: [
-				new Thread(PerlDebugSession.threadId, "thread 1")
+				new Thread(PerlDebugSession.threadId, 'thread 1')
 			]
 		};
 		this.sendResponse(response);
@@ -366,7 +360,7 @@ export class PerlDebugSession extends LoggingDebugSession {
 			const line = lines[i];
 			const matched = line.match(stackTrace);
 			if (matched) {
-				let file = line.split("called from file")[1];
+				let file = line.split('called from file')[1];
 				if (file.includes('./')) {
 					file = join(this.cwd, file);
 				}
@@ -387,9 +381,9 @@ export class PerlDebugSession extends LoggingDebugSession {
 
 		response.body = {
 			scopes: [
-				new Scope("My", this._variableHandles.create('my'), false),
-				new Scope("Our", this._variableHandles.create('our'), false),
-				new Scope("Specials", this._variableHandles.create('special'), true)
+				new Scope('My', this._variableHandles.create('my'), false),
+				new Scope('Our', this._variableHandles.create('our'), false),
+				new Scope('Specials', this._variableHandles.create('special'), true)
 			]
 		};
 		// clear parsed variables and reset counter
@@ -406,48 +400,48 @@ export class PerlDebugSession extends LoggingDebugSession {
 		// < 1000 => nested vars
 		if (args.variablesReference >= 1000) {
 			if (handle === 'my') {
-				vars = (await this.request(`print STDERR join ('|', sort(keys( % { PadWalker::peek_my(2); })))`))[1].split('|');
+				vars = (await this.request('print STDERR join ("|", sort(keys( % { PadWalker::peek_my(2); })))'))[1].split('|');
 				logger.log(`Varnames: ${vars.join(', ')}`);
 			}
 			if (handle === 'our') {
-				vars = (await this.request(`print STDERR join ('|', sort(keys( % { PadWalker::peek_our(2); })))`))[1].split('|');
+				vars = (await this.request('print STDERR join ("|", sort(keys( % { PadWalker::peek_our(2); })))'))[1].split('|');
 				logger.log(`Varnames: ${vars.join(', ')}`);
 			}
 			else if (handle === 'special') {
 				vars = [
-					"%ENV",
-					"@ARGV",
-					"@INC",
-					"@F",
-					"$SIG",
-					"$ARG",
-					"$NR",
-					"$RS",
-					"$OFS",
-					"$ORS",
-					"$LIST_SEPARATOR",
-					"$SUBSCRIPT_SEPARATOR",
-					"$FORMAT_FORMFEED",
-					"$FORMAT_LINE_BREAK_CHARACTERS",
-					"$ACCUMULATOR",
-					"$CHILD_ERROR",
-					"$ERRNO",
-					"$EVAL_ERROR",
-					"$PID",
-					"$UID",
-					"$EUID",
-					"$GID",
-					"$EGID",
-					"$PROGRAM_NAME",
-					"$PERL_VERSION",
-					"$DEBUGGING",
-					"$INPLACE_EDIT",
-					"$OSNAME",
-					"$PERLDB",
-					"$BASETIME",
-					"$WARNING",
-					"$EXECUTABLE_NAME",
-					"$ARGV"
+					'%ENV',
+					'@ARGV',
+					'@INC',
+					'@F',
+					'$SIG',
+					'$ARG',
+					'$NR',
+					'$RS',
+					'$OFS',
+					'$ORS',
+					'$LIST_SEPARATOR',
+					'$SUBSCRIPT_SEPARATOR',
+					'$FORMAT_FORMFEED',
+					'$FORMAT_LINE_BREAK_CHARACTERS',
+					'$ACCUMULATOR',
+					'$CHILD_ERROR',
+					'$ERRNO',
+					'$EVAL_ERROR',
+					'$PID',
+					'$UID',
+					'$EUID',
+					'$GID',
+					'$EGID',
+					'$PROGRAM_NAME',
+					'$PERL_VERSION',
+					'$DEBUGGING',
+					'$INPLACE_EDIT',
+					'$OSNAME',
+					'$PERLDB',
+					'$BASETIME',
+					'$WARNING',
+					'$EXECUTABLE_NAME',
+					'$ARGV'
 				];
 			}
 			vs = await this.parseVars(vars);
@@ -557,7 +551,7 @@ export class PerlDebugSession extends LoggingDebugSession {
 	// Parse output of Data::Dumper
 	private async parseDumper(lines: string[]): Promise<[number, string]> {
 		let cv: Variable[] = [];
-		let varType = "";
+		let varType = '';
 		let arrayIndex = 0;
 		const ref = this.currentVarRef;
 		this.currentVarRef--;

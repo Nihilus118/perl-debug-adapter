@@ -10,11 +10,12 @@
     ],
     "rules": {
         "@typescript-eslint/naming-convention": "warn",
-        "@typescript-eslint/semi": "warn",
+        "@typescript-eslint/semi": "error",
         "curly": "warn",
-        "eqeqeq": "warn",
+        "eqeqeq": "error",
         "no-throw-literal": "warn",
-        "semi": "off"
+        "semi": "error",
+        "quotes": [2, "single", { "avoidEscape": true }]
     },
     "ignorePatterns": [
         "**/*.d.ts"

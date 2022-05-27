@@ -33,12 +33,16 @@ export class StreamCatcher extends EventEmitter {
     private requestQueue: RequestTask[] = [];
     private requestRunning: RequestTask | null = null;
 
-    private buffer: string[] = [''];
-
     public input!: Writable;
-
+    
     constructor() {
         super();
+    }
+
+    private buffer: string[] = [''];
+
+    public getBuffer(): string[] {
+        return this.buffer;
     }
 
     async launch(input: Writable, output: Readable): Promise<string[]> {
