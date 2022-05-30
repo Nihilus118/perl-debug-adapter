@@ -5,7 +5,7 @@ import {
 import { DebugProtocol } from '@vscode/debugprotocol';
 import { Subject } from 'await-notify';
 import { ChildProcess, spawn, SpawnOptions } from 'child_process';
-import { basename, dirname, join } from 'path';
+import { basename, dirname, join, resolve } from 'path';
 import { ansiSeq, StreamCatcher } from './streamCatcher';
 
 interface ILaunchRequestArguments extends DebugProtocol.LaunchRequestArguments {
@@ -24,7 +24,6 @@ interface IFunctionBreakpointData {
 }
 
 interface IBreakpointData {
-	file: string,
 	line: number,
 	id: number,
 	condition: string;
@@ -40,7 +39,7 @@ export class PerlDebugSession extends LoggingDebugSession {
 	private _variableHandles = new Handles<'my' | 'our' | 'special'>();
 	private childVarsMap = new Map<number, Variable[]>();
 	private parentVarsMap = new Map<number, Variable>();
-	private bps: IBreakpointData[] = [];
+	private breakpointsMap = new Map<string, IBreakpointData[]>();
 	private funcBps: IFunctionBreakpointData[] = [];
 	private cwd: string = '';
 
@@ -76,6 +75,22 @@ export class PerlDebugSession extends LoggingDebugSession {
 		} else {
 			return path.replace(/\\/g, '/');
 		}
+	}
+
+	/**
+	 * This function is used to format paths for the perl5db-process.
+	 */
+	private convertToPerlPath(filePath: string, rootPath?: string): string {
+		let returnVal: string;
+		if (rootPath !== null) {
+			returnVal = resolve(rootPath || '', filePath);
+		}
+		else {
+			returnVal = filePath
+				.replace(/\\{1,2}/g, '/')
+				.replace(/^\.\.\/+/g, '');
+		}
+		return returnVal;
 	}
 
 	/**
@@ -224,26 +239,30 @@ export class PerlDebugSession extends LoggingDebugSession {
 				this.sendEvent(new TerminatedEvent());
 			}
 			// set breakpoints
-			for (let i = 0; i < this.bps.length; i++) {
-				const id = this.bps[i].id;
-				const file = this.normalizePathAndCasing(this.bps[i].file);
-				const condition = this.bps[i].condition;
-				let line = this.bps[i].line;
-				let success = false;
-				// try to set the breakpoint
-				for (let tries = 0; success === false && tries < this.maxBreakpointTries; tries++) {
+			const scriptPath = this.normalizePathAndCasing(args.program);
+			const bps = this.breakpointsMap.get(scriptPath);
+			if (bps) {
+				for (let i = 0; i < bps.length; i++) {
+					const id = bps[i].id;
+					const condition = bps[i].condition;
+					let line = bps[i].line;
+					let success = false;
 					// try to set the breakpoint
-					const data = (await this.request(`b ${file}:${line} ${condition}`)).join('');
-					if (data.includes('not breakable')) {
-						// try again at the next line
-						line++;
-					} else {
-						// a breakable line was found and the breakpoint set
-						this.sendEvent(new BreakpointEvent('changed', { verified: true, id: id, line: line } as DebugProtocol.Breakpoint));
-						success = true;
+					for (let tries = 0; success === false && tries < this.maxBreakpointTries; tries++) {
+						// try to set the breakpoint
+						const data = (await this.request(`b ${this.convertToPerlPath(scriptPath, this.cwd)}:${line} ${condition}`)).join('');
+						if (data.includes('not breakable')) {
+							// try again at the next line
+							line++;
+						} else {
+							// a breakable line was found and the breakpoint set
+							this.sendEvent(new BreakpointEvent('changed', { verified: true, id: id, line: line } as DebugProtocol.Breakpoint));
+							success = true;
+						}
 					}
 				}
 			}
+
 			// set function breakpoints
 			for (let i = 0; i < this.funcBps.length; i++) {
 				const bp = this.funcBps[i];
@@ -269,11 +288,13 @@ export class PerlDebugSession extends LoggingDebugSession {
 	}
 
 	protected async setBreakPointsRequest(response: DebugProtocol.SetBreakpointsResponse, args: DebugProtocol.SetBreakpointsArguments): Promise<void> {
-		// save breakpoints in memory and hand them over in the launch request later
+		// save breakpoints in memory and either hand them over in the launch request later or set them now if the runtime is active
+		const scriptPath = args.source.path as string;
 		const argBps = args.breakpoints!;
 		this.currentBreakpointID = 1;
 
 		let bps: Breakpoint[] = [];
+		let mapBps: IBreakpointData[] = [];
 
 		for (let i = 0; i < argBps.length; i++) {
 			let line = argBps[i].line;
@@ -281,14 +302,17 @@ export class PerlDebugSession extends LoggingDebugSession {
 
 			// this is only possible if the runtime is currently active
 			if (this.isActive()) {
-				// first we clear all existing breakpoints
-				for (let i = 0; i < this.bps.length; i++) {
-					const bp = this.bps[i];
-					await this.request(`B ${bp.line}`);
+				// first we clear all existing breakpoints inside the file
+				const bps = this.breakpointsMap.get(this.normalizePathAndCasing(scriptPath));
+				if (bps) {
+					for (let i = 0; i < bps.length; i++) {
+						const bp = bps[i];
+						await this.request(`B ${this.convertToPerlPath(scriptPath, this.cwd)}:${bp.line}`);
+					}
 				}
 				// now we try to set every breakpoint requested
 				for (let tries = 0; success === false && tries < 15; tries++) {
-					const data = (await this.request(`b ${args.source.path}:${line} ${argBps[i].condition}`)).join();
+					const data = (await this.request(`b ${this.convertToPerlPath(scriptPath, this.cwd)}:${line} ${argBps[i].condition}`)).join();
 					if (data.includes('not breakable')) {
 						// try again at the next line
 						line++;
@@ -303,17 +327,20 @@ export class PerlDebugSession extends LoggingDebugSession {
 
 			const bp = new Breakpoint(success, line, undefined, args.source as Source);
 			bp.setId(this.currentBreakpointID);
-			this.bps.push({
+			bps.push(bp);
+
+			// filling the array for the breakpoints map
+			mapBps.push({
 				id: this.currentBreakpointID,
 				line: line,
-				file: args.source.path as String,
-				condition: argBps[i].condition
-			} as IBreakpointData);
-			bps.push(bp);
+				condition: argBps[i].condition || ''
+			});
 
 			this.currentBreakpointID++;
 		}
 
+		// save breakpoints inside the map
+		this.breakpointsMap.set(this.normalizePathAndCasing(scriptPath), mapBps);
 		// send back the actual breakpoint positions
 		response.body = {
 			breakpoints: bps
