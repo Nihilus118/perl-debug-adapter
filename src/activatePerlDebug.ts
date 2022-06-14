@@ -3,7 +3,7 @@
 import * as vscode from 'vscode';
 import { DebugConfiguration, ProviderResult, WorkspaceFolder } from 'vscode';
 
-const VARIABLE_REGEXP = /(\$|@|%)[a-z0-9_]+((\->)?(\{"[a-z0-9_\s]+"\}|\{'[a-z0-9_\s]+'\}|\[\d+\]|\{\$[a-z0-9_]+\}|::[a-z0-9_]+))*/gi;
+const VARIABLE_REGEXP = /((\$|@|%)[a-z0-9_]+)((\->)?(\{"[a-z0-9_\s]+"\}|\{'[a-z0-9_\s]+'\}|\[\d+\]|\{\$[a-z0-9_]+\}|::[a-z0-9_]+))*/gi;
 
 export function activatePerlDebug(context: vscode.ExtensionContext, factory: vscode.DebugAdapterDescriptorFactory) {
 
@@ -70,7 +70,7 @@ export function activatePerlDebug(context: vscode.ExtensionContext, factory: vsc
 
 			let m: RegExpExecArray | null;
 			while (m = VARIABLE_REGEXP.exec(line)) {
-				const varRange = new vscode.Range(position.line, m.index, position.line, m.index + m[0].length);
+				const varRange = new vscode.Range(position.line, m.index, position.line, m.index + m[1].length);
 
 				if (varRange.contains(position)) {
 					return new vscode.EvaluatableExpression(varRange);
