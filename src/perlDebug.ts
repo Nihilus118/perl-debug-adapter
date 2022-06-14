@@ -111,39 +111,34 @@ export class PerlDebugSession extends LoggingDebugSession {
 	async setBreakpointsInFile(filePath: string, bps: DebugProtocol.SourceBreakpoint[]): Promise<Breakpoint[]> {
 		const setBps: Breakpoint[] = [];
 		const mapBps: IBreakpointData[] = [];
-		const formattedPath = this.normalizePathAndCasing(filePath);
 
-		if (!await this.changeFileContext(formattedPath)) {
-			throw new Error(`Could not change file context to ${formattedPath}!`);
-			// TODO: Postpone breakpoints until @INC contains file
-		} else {
-			for (let i = 0; i < bps.length; i++) {
-				let success = false;
-				let line = bps[i].line;
-				for (let tries = 0; success === false && tries < 15; tries++) {
-					const data = (await this.request(`b ${line} ${bps[i].condition}`)).join('');
-					if (data.includes('not breakable')) {
-						// try again at the next line
-						line++;
-					} else {
-						// a breakable line was found and the breakpoint set
-						success = true;
-					}
+		for (let i = 0; i < bps.length; i++) {
+			let success = false;
+			let line = bps[i].line;
+			for (let tries = 0; success === false && tries < 15; tries++) {
+				const data = (await this.request(`b ${line} ${bps[i].condition}`)).join('');
+				if (data.includes('not breakable')) {
+					// try again at the next line
+					line++;
+				} else {
+					// a breakable line was found and the breakpoint set
+					success = true;
 				}
-				const bp = new Breakpoint(success, line, undefined, new Source(filePath, filePath));
-				bp.setId(this.currentBreakpointID);
-				setBps.push(bp);
-
-				// filling the array for the breakpoints map
-				mapBps.push({
-					id: this.currentBreakpointID,
-					line: line,
-					condition: bps[i].condition || ''
-				});
-
-				this.currentBreakpointID++;
 			}
+			const bp = new Breakpoint(success, line, undefined, new Source(filePath, filePath));
+			bp.setId(this.currentBreakpointID);
+			setBps.push(bp);
+
+			// filling the array for the breakpoints map
+			mapBps.push({
+				id: this.currentBreakpointID,
+				line: line,
+				condition: bps[i].condition || ''
+			});
+
+			this.currentBreakpointID++;
 		}
+
 		// save breakpoints inside the map
 		this.breakpointsMap.set(this.normalizePathAndCasing(filePath), mapBps);
 
@@ -154,12 +149,9 @@ export class PerlDebugSession extends LoggingDebugSession {
 	 * Unsets all breakpoints in a given perl file.
 	 */
 	async removeBreakpointsInFile(filePath: string) {
-		const changedFile = await this.changeFileContext(this.convertToPerlPath(filePath));
-		if (!changedFile) {
-			throw new Error(`Could not change file context to ${this.convertToPerlPath(filePath)}!`);
-		}
+		const formattedPath = this.normalizePathAndCasing(filePath);
 
-		const bps = this.breakpointsMap.get(this.normalizePathAndCasing(filePath));
+		const bps = this.breakpointsMap.get(formattedPath);
 		if (bps) {
 			for (let i = 0; i < bps.length; i++) {
 				// remove the breakpoint inside the debugger
@@ -180,22 +172,6 @@ export class PerlDebugSession extends LoggingDebugSession {
 		} else {
 			return false;
 		}
-	}
-
-	/**
-	 * This function is called after every step to check if we reached the script end or an error.
-	 */
-	private async isEnd(lines: string[], event: string) {
-		const text = lines.join();
-
-		// did the script die?
-		if (text.includes('Debugged program terminated.')) {
-			// ensure that every script output is send to the debug console before closing the session
-			await this.request('sleep(.5)');
-			this.sendEvent(new TerminatedEvent());
-		}
-
-		this.sendEvent(new StoppedEvent(event, PerlDebugSession.threadId));;
 	}
 
 	/**
@@ -314,7 +290,9 @@ export class PerlDebugSession extends LoggingDebugSession {
 				this.sendEvent(new OutputEvent(`Could not load required modules:\n${lines.join('\n')}`, 'important'));
 				this.sendEvent(new TerminatedEvent());
 			}
-			// set breakpoints
+			// stop when loading a new file
+			await this.request('package DB; *DB::postponed = sub { return sub { if ( \'GLOB\' eq ref(\\$_[0]) && $_[0] =~ /<(.*)\\s*$/s) { $DB::single = 1; print STDERR "loaded source $1\\n"; } } ; }->(\\\\&DB::postponed)');
+			// set breakpoints inside the main script
 			const scriptPath = this.normalizePathAndCasing(args.program);
 			const bps = this.breakpointsMap.get(scriptPath);
 			if (bps) {
@@ -441,11 +419,10 @@ export class PerlDebugSession extends LoggingDebugSession {
 			const line = lines[i];
 			const matched = line.match(stackTrace);
 			if (matched) {
-				let file = line.split('called from file')[1];
-				if (file.includes('./')) {
+				let file = this.normalizePathAndCasing(matched[2]);
+				if (file.startsWith('.')) {
 					file = join(this.cwd, file);
 				}
-				file = this.normalizePathAndCasing(matched[2]);
 				const fn = new Source(basename(file), file);
 				stackFrames.push(new StackFrame(i, matched[1], fn, +matched[3]));
 			}
@@ -771,11 +748,35 @@ export class PerlDebugSession extends LoggingDebugSession {
 	}
 
 	private async postExecution(lines: string[]) {
-		const scriptOutput = lines.slice(1, lines.findIndex(e => { return e.match(/main::.*|Debugged program terminated/); }));
+		const scriptOutput = lines.slice(1, lines.findIndex(e => { return e.match(/main::.*|Debugged program terminated|loaded source/); }));
 		if (scriptOutput.filter(e => { return e !== ''; }).length > 0) {
 			this.sendEvent(new OutputEvent(scriptOutput.join('\n'), 'stderr'));
 		}
-		await this.isEnd(lines, 'breakpoint');
+		// check if we reached the end
+		if (lines.join().includes('Debugged program terminated.')) {
+			// ensure that every script output is send to the debug console before closing the session
+			await this.request('sleep(.5)');
+			this.sendEvent(new TerminatedEvent());
+		}
+		// set breakpoints if new file is loaded which contains breakpoints
+		const newSource = lines.find(ln => { return ln.match(/loaded source/); });
+		if (newSource) {
+			const matched = newSource.match(/loaded source (.*)/);
+			if (matched) {
+				let file = matched[1]!;
+				if (file.match(/^\./)) {
+					file = join(this.cwd, file);
+				}
+				const bps = this.breakpointsMap.get(this.normalizePathAndCasing(file));
+				if (bps) {
+					await this.setBreakpointsInFile(file, bps);
+				}
+				// we continue until we hit another breakpoint or new source
+				await this.continue();
+			}
+		} else {
+			this.sendEvent(new StoppedEvent('breakpoint', PerlDebugSession.threadId));
+		}
 	}
 
 	private async continue() {
@@ -784,17 +785,14 @@ export class PerlDebugSession extends LoggingDebugSession {
 
 	private async step() {
 		await this.postExecution(await this.request('n'));
-
 	}
 
 	private async stepIn() {
 		await this.postExecution(await this.request('s'));
-
 	}
 
 	private async stepOut() {
 		await this.postExecution(await this.request('r'));
-
 	}
 
 	protected continueRequest(response: DebugProtocol.ContinueResponse, args: DebugProtocol.ContinueArguments): void {
