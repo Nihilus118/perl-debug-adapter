@@ -250,7 +250,6 @@ export class PerlDebugSession extends LoggingDebugSession {
 		// Spawn perl process and handle errors
 		args.cwd = this.normalizePathAndCasing(args.cwd || dirname(args.program));
 		logger.log(`CWD: ${args.cwd}`);
-		logger.log(`ENV: ${JSON.stringify(process.env)}`);
 		const spawnOptions: SpawnOptions = {
 			detached: true,
 			cwd: args.cwd,
