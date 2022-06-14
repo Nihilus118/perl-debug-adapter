@@ -700,7 +700,15 @@ export class PerlDebugSession extends LoggingDebugSession {
 			for (let i = 0; i < parentVars.length; i++) {
 				const parentVar = parentVars[i];
 				if (i === 0) {
-					expressionToChange = `${parentVar.name.replace(/^%/, '$')}`;
+					if (parentVar.name.startsWith('$')) {
+						// if a nested variable starts with a dollar sign it has to be an object so the arrow is neccesarry
+						expressionToChange = `${parentVar.name}->`;
+					} else if (parentVar.name.startsWith('%')) {
+						// accessing hash values requires a dollar sign at the start
+						expressionToChange = `${parentVar.name.replace(/^%/, '$')}`;
+					} else {
+						expressionToChange = parentVar.name;
+					}
 				} else {
 					switch (currentType) {
 						case 'ARRAY':
