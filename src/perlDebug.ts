@@ -603,7 +603,7 @@ export class PerlDebugSession extends LoggingDebugSession {
 	// Regexp for parsing the output of Data::Dumper
 	private isScalar = /"?(.*)"?\s=>?\s(undef|".*"|-?\d+|\[\]|\{\}|bless\(.*\)|sub\s\{.*\}|\\\*\{".*\"})[,|;]/;
 	private isNewNested = /"(.*)"\s=>?\s(bless\(\s)?(\[|\{)/;
-	private isNestedArrayPosition = /^(\{|\[)$/;
+	private isNestedArrayPosition = /^(bless\(\s*)?(\{|\[)$/;
 	private isArrayPosition = /^(undef|".*"|-?\d+|\[\]|\{\}|bless\(.*\)|sub\s\{.*\})[,|;]/;
 	private isVarEnd = /^(\}|\]),?(\s?'(.*)'\s\))?[,|;]/;
 	// Parse output of Data::Dumper
@@ -670,7 +670,7 @@ export class PerlDebugSession extends LoggingDebugSession {
 					cv.push(newVar);
 					continue;
 				}
-				logger.error(`Error: ${line}`);
+				logger.error(`Unrecognized Data::Dumper line: ${line}`);
 			}
 		}
 		this.childVarsMap.set(ref, cv);
@@ -718,7 +718,7 @@ export class PerlDebugSession extends LoggingDebugSession {
 							expressionToChange = `${(expressionToChange.endsWith(']') ? `${expressionToChange}->` : expressionToChange)}{'${parentVar.name}'}`;
 							break;
 						default:
-							logger.error(`error: ${currentType}`);
+							logger.error(`Uknown variable type: ${currentType}`);
 							break;
 					}
 					currentType = parentVar.value.match(/(^ARRAY|^HASH|.*)/)![1];
@@ -765,6 +765,7 @@ export class PerlDebugSession extends LoggingDebugSession {
 			// ensure that every script output is send to the debug console before closing the session
 			await this.request('sleep(.5)');
 			this.sendEvent(new TerminatedEvent());
+			return;
 		}
 		// set breakpoints if new file is loaded which contains breakpoints
 		const newSource = lines.find(ln => { return ln.match(/loaded source/); });
@@ -779,7 +780,7 @@ export class PerlDebugSession extends LoggingDebugSession {
 				if (bps) {
 					await this.setBreakpointsInFile(file, bps);
 				}
-				// we continue until we hit another breakpoint or new source
+				// we continue until we hit another breakpoint, exception or new source
 				await this.continue();
 			}
 		} else {
@@ -803,32 +804,32 @@ export class PerlDebugSession extends LoggingDebugSession {
 		await this.postExecution(await this.request('r'));
 	}
 
-	protected continueRequest(response: DebugProtocol.ContinueResponse, args: DebugProtocol.ContinueArguments): void {
+	protected continueRequest(response: DebugProtocol.ContinueResponse, _args: DebugProtocol.ContinueArguments): void {
 		this.continue();
 		this.sendResponse(response);
 	}
 
-	protected nextRequest(response: DebugProtocol.NextResponse, args: DebugProtocol.NextArguments): void {
+	protected nextRequest(response: DebugProtocol.NextResponse, _args: DebugProtocol.NextArguments): void {
 		this.step();
 		this.sendResponse(response);
 	}
 
-	protected stepInRequest(response: DebugProtocol.StepInResponse, args: DebugProtocol.StepInArguments): void {
+	protected stepInRequest(response: DebugProtocol.StepInResponse, _args: DebugProtocol.StepInArguments): void {
 		this.stepIn();
 		this.sendResponse(response);
 	}
 
-	protected stepOutRequest(response: DebugProtocol.StepOutResponse, args: DebugProtocol.StepOutArguments, request?: DebugProtocol.Request): void {
+	protected stepOutRequest(response: DebugProtocol.StepOutResponse, _args: DebugProtocol.StepOutArguments, _request?: DebugProtocol.Request): void {
 		this.stepOut();
 		this.sendResponse(response);
 	}
 
-	protected restartRequest(response: DebugProtocol.RestartResponse, args: DebugProtocol.RestartArguments, request?: DebugProtocol.Request): void {
+	protected restartRequest(response: DebugProtocol.RestartResponse, _args: DebugProtocol.RestartArguments, _request?: DebugProtocol.Request): void {
 		this.streamCatcher.destroy();
 		this.sendResponse(response);
 	}
 
-	protected terminateRequest(response: DebugProtocol.TerminateResponse, args: DebugProtocol.TerminateArguments, request?: DebugProtocol.Request): void {
+	protected terminateRequest(response: DebugProtocol.TerminateResponse, _args: DebugProtocol.TerminateArguments, _request?: DebugProtocol.Request): void {
 		this.request('q');
 		this.streamCatcher.destroy();
 		this.sendResponse(response);
