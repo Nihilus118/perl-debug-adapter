@@ -718,7 +718,7 @@ export class PerlDebugSession extends LoggingDebugSession {
 							expressionToChange = `${(expressionToChange.endsWith(']') ? `${expressionToChange}->` : expressionToChange)}{'${parentVar.name}'}`;
 							break;
 						default:
-							logger.error(`Uknown variable type: ${currentType}`);
+							logger.error(`Unknown variable type: ${currentType}`);
 							break;
 					}
 					currentType = parentVar.value.match(/(^ARRAY|^HASH|.*)/)![1];
