@@ -449,21 +449,21 @@ export class PerlDebugSession extends LoggingDebugSession {
 	}
 
 	protected async variablesRequest(response: DebugProtocol.VariablesResponse, args: DebugProtocol.VariablesArguments, request?: DebugProtocol.Request): Promise<void> {
-		let vars: string[] = [];
-		let vs: Variable[] = [];
+		let varNames: string[] = [];
+		let parsedVars: Variable[] = [];
 		const handle = this._variableHandles.get(args.variablesReference);
 		// < 1000 => nested vars
 		if (args.variablesReference >= 1000) {
 			if (handle === 'my') {
-				vars = (await this.request('print STDERR join ("|", sort(keys( % { PadWalker::peek_my(2); })))'))[1].split('|');
-				logger.log(`Varnames: ${vars.join(', ')}`);
+				varNames = (await this.request('print STDERR join ("|", sort(keys( % { PadWalker::peek_my(2); })))'))[1].split('|');
+				logger.log(`Varnames: ${varNames.join(', ')}`);
 			}
 			if (handle === 'our') {
-				vars = (await this.request('print STDERR join ("|", sort(keys( % { PadWalker::peek_our(2); })))'))[1].split('|');
-				logger.log(`Varnames: ${vars.join(', ')}`);
+				varNames = (await this.request('print STDERR join ("|", sort(keys( % { PadWalker::peek_our(2); })))'))[1].split('|');
+				logger.log(`Varnames: ${varNames.join(', ')}`);
 			}
 			else if (handle === 'special') {
-				vars = [
+				varNames = [
 					'%ENV',
 					'@ARGV',
 					'@INC',
@@ -499,19 +499,19 @@ export class PerlDebugSession extends LoggingDebugSession {
 					'$ARGV'
 				];
 			}
-			if (vars[0] !== '') {
-				vs = await this.parseVars(vars);
+			if (varNames[0] !== '') {
+				parsedVars = await this.parseVars(varNames);
 			}
 		} else {
 			// Get already parsed vars from map
 			const newVars = this.childVarsMap.get(args.variablesReference);
 			if (newVars) {
-				vs = vs.concat(newVars);
+				parsedVars = parsedVars.concat(newVars);
 			}
 		}
 
 		response.body = {
-			variables: vs
+			variables: parsedVars
 		};
 
 		this.sendResponse(response);
