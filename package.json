@@ -183,6 +183,17 @@
           }
         ]
       }
-    ]
+    ],
+    "configuration": {
+      "title": "Perl Debug",
+      "properties": {
+        "perl.debug.showInlineValues": {
+          "type": "boolean",
+          "default": true,
+          "description": "If enabled inline variable values will be rendered to the viewport while debugging.",
+          "scope": "machine-overridable"
+        }
+      }
+    }
   }
 }
