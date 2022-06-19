@@ -286,10 +286,10 @@ export class PerlDebugSession extends LoggingDebugSession {
 		// does the user want to debug the script or just run it?
 		if (args.debug === true || args.debug === undefined) {
 			logger.log('Starting debugging');
-			
+
 			// stop when loading a new file
 			await this.request('package DB; *DB::postponed = sub { return sub { if ( \'GLOB\' eq ref(\\$_[0]) && $_[0] =~ /<(.*)\\s*$/s) { $DB::single = 1; print STDERR "loaded source $1\\n"; } } ; }->(\\\\&DB::postponed)');
-			
+
 			// use PadWalker to list variables in scope and Data::Dumper for accessing variable values
 			const lines = await this.request('use PadWalker qw/peek_our peek_my/; use Data::Dumper;');
 			if (lines.join().includes('Can\'t locate')) {
@@ -534,11 +534,15 @@ export class PerlDebugSession extends LoggingDebugSession {
 		// get variable value
 		const evaledVar = (await this.parseVars([varName]))[0];
 
-		response.body = {
-			result: evaledVar.value,
-			variablesReference: evaledVar.variablesReference,
-		};
-
+		try {
+			response.body = {
+				result: evaledVar.value,
+				variablesReference: evaledVar.variablesReference,
+			};
+		} catch (error) {
+			logger.error(`Could not evaluate ${varName}: ${error}`);
+			response.success = false;
+		}
 		this.sendResponse(response);
 	}
 
@@ -553,6 +557,29 @@ export class PerlDebugSession extends LoggingDebugSession {
 			}
 
 			let varDump = (await this.request(`print STDERR Data::Dumper->new([${varName}], [])->Deepcopy(1)->Sortkeys(1)->Indent(1)->Terse(0)->Trailingcomma(1)->Useqq(1)->Dump()`)).filter(e => { return e !== ''; }).slice(1, -1);
+			try {
+				while (true) {
+					// Continue everytime we reach a breakpoint during this call until we have proper output
+					if (varDump[0].match(/^\$VAR1\s=\s.*/)) {
+						break;
+					} else {
+						logger.log('Reached breakpoint while dumping variable');
+						// check if we reached the end
+						if (varDump.join().includes('Debugged program terminated.')) {
+							// ensure that every script output is send to the debug console before closing the session
+							await this.request('sleep(.5)');
+							this.sendEvent(new TerminatedEvent());
+							return [new Variable(varName, '')];
+						}
+						varDump = (await this.request('c')).filter(e => { return e !== ''; }).slice(1, -1);
+					}
+				}
+			} catch (error) {
+				// Log error and continue with parsing the next variable
+				logger.error(`Could not parse variable ${varName}: ${varDump.join('\n')}`);
+				this.currentVarRef++;
+				continue;
+			}
 			try {
 				if (varDump[0]) {
 					varDump[0] = varDump[0].replace(/=/, '=>');
@@ -752,7 +779,7 @@ export class PerlDebugSession extends LoggingDebugSession {
 		this.sendResponse(response);
 	}
 
-	private async postExecution(lines: string[]) {
+	private async postExecution(lines: string[]): Promise<void> {
 		const scriptOutput = lines.slice(1, lines.findIndex(e => { return e.match(/main::.*|Debugged program terminated|loaded source/); }));
 		if (scriptOutput.filter(e => { return e !== ''; }).length > 0) {
 			this.sendEvent(new OutputEvent(scriptOutput.join('\n'), 'stderr'));
