@@ -499,7 +499,9 @@ export class PerlDebugSession extends LoggingDebugSession {
 					'$ARGV'
 				];
 			}
-			vs = await this.parseVars(vars);
+			if (vars[0] !== '') {
+				vs = await this.parseVars(vars);
+			}
 		} else {
 			// Get already parsed vars from map
 			const newVars = this.childVarsMap.get(args.variablesReference);
