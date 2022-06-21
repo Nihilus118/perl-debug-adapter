@@ -1,34 +1,18 @@
-# VS Code Mock Debug
+# Perl5 Debug Adapter
 
-This is a starter sample for developing VS Code debug adapters.
+This debug adapter invokes **perl -d**  and handles communication with VS Code.
 
-**Mock Debug** simulates a debug adapter for Visual Studio Code.
-It supports *step*, *continue*, *breakpoints*, *exceptions*, and
-*variable access* but it is not connected to any real debugger.
+It has no dependencies and should work out of the box on Linux, Windows and Mac using VS Code. It also works inside **Microsofts Remote Extensions** Remote-SSH, Remote-WSL and Remote-Containers.
 
-The sample is meant as an educational piece showing how to implement a debug
-adapter for VS Code. It can be used as a starting point for developing a real adapter.
+## Setup
 
-More information about how to develop a new debug adapter can be found
-[here](https://code.visualstudio.com/docs/extensions/example-debuggers).
+### VS Code
 
-## Using Mock Debug
+* Install the **Perl5 Debug Adapter** extension in VS Code.
+* Perl needs to be installed and the path of the **perl** executable either needs to be available inside the **$PATH** environment variable or be provided via the **launch.json** configuration file.
+* **OPTIONAL** I recommend using this extension together with BSCANs Perl Navigator https://marketplace.visualstudio.com/items?itemName=bscan.perlnavigator as it provides great language server features out of the box.
 
-* Install the **Mock Debug** extension in VS Code.
-* Create a new 'program' file `readme.md` and enter several lines of arbitrary text.
-* Switch to the debug viewlet and press the gear dropdown.
-* Select the debug environment "Mock Debug".
-* Press the green 'play' button to start debugging.
+### Other Editors and IDEs
 
-You can now 'step through' the `readme.md` file, set and hit breakpoints, and run into exceptions (if the word exception appears in a line).
-
-![Mock Debug](images/mock-debug.gif)
-
-## Build and Run
-
-* Clone the project [https://github.com/Microsoft/vscode-mock-debug.git](https://github.com/Microsoft/vscode-mock-debug.git)
-* Open the project folder in VS Code.
-* Press `F5` to build and launch Mock Debug in another VS Code window.
-* In the explorer view of the new window open the 'program' file `readme.md`
-* Set some breakpoints
-* From the editor's "Run and Debug" toolbar dropdown menu select "Debug File"
+As this extension implements the Debug Adapter Protocol it should be usable with other editors and IDEs https://microsoft.github.io/debug-adapter-protocol/implementors/tools/ aswell.
+Feel free to try it out and report any bugs that may occur.
