@@ -644,18 +644,19 @@ export class PerlDebugSession extends LoggingDebugSession {
 							value: `${matched[2]}`,
 							variablesReference: 0,
 							evaluateName: varNames[i],
-							presentationHint: { kind: 'data' }
+							presentationHint: { kind: 'data' },
+							type: 'SCALAR'
 						});
 					} else {
 						this.currentVarRef--;
 						const matched = varDump[varDump.length - 1].trim().match(this.isVarEnd);
-						const value = `${(matched![1] === '}' ? 'HASH' : 'ARRAY')}${(matched![3] ? ` ${matched![3]}` : '')}`;
 						const newVar: DebugProtocol.Variable = {
 							name: varNames[i],
-							value: value,
+							value: `${(matched![1] === '}' ? 'HASH' : 'ARRAY')}${(matched![3] ? ` ${matched![3]}` : '')}`,
 							variablesReference: this.currentVarRef,
 							evaluateName: varNames[i],
-							presentationHint: { kind: 'baseClass' }
+							presentationHint: { kind: 'baseClass' },
+							type: `${(matched![1] === '}' ? 'HASH' : 'ARRAY')}${(matched![3] ? ` ${matched![3]}` : '')}`
 						};
 						vs.push(newVar);
 						this.parentVarsMap.set(this.currentVarRef, newVar);
@@ -666,7 +667,8 @@ export class PerlDebugSession extends LoggingDebugSession {
 						name: varNames[i],
 						value: 'undef',
 						variablesReference: 0,
-						presentationHint: { kind: 'data' }
+						presentationHint: { kind: 'data' },
+						type: 'UNDEF'
 					});
 				}
 			} catch (error: any) {
@@ -675,7 +677,8 @@ export class PerlDebugSession extends LoggingDebugSession {
 					name: varNames[i],
 					value: 'undef',
 					variablesReference: 0,
-					presentationHint: { kind: 'data' }
+					presentationHint: { kind: 'data' },
+					type: 'UNDEF'
 				});
 			}
 		}
@@ -692,7 +695,7 @@ export class PerlDebugSession extends LoggingDebugSession {
 	private isVarEnd = /^(\}|\]),?(\s?'(.*)'\s\))?[,|;]/;
 	// Parse output of Data::Dumper
 	private async parseDumper(lines: string[]): Promise<[number, string]> {
-		let cv: Variable[] = [];
+		let cv: DebugProtocol.Variable[] = [];
 		let varType = '';
 		let arrayIndex = 0;
 		const ref = this.currentVarRef;
@@ -711,7 +714,9 @@ export class PerlDebugSession extends LoggingDebugSession {
 					cv.push({
 						name: matched[1].replace(/"/, ''),
 						value: matched[2],
-						variablesReference: 0
+						variablesReference: 0,
+						presentationHint: { kind: 'data' },
+						type: 'SCALAR'
 					});
 					continue;
 				}
@@ -720,37 +725,43 @@ export class PerlDebugSession extends LoggingDebugSession {
 					cv.push({
 						name: `${arrayIndex}`,
 						value: matched[1],
-						variablesReference: 0
+						variablesReference: 0,
+						presentationHint: { kind: 'data' },
+						type: 'SCALAR'
 					});
 					arrayIndex++;
 					continue;
 				}
 				matched = line.match(this.isNestedArrayPosition);
 				if (matched) {
-					const newVar: Variable = {
+					const newVar: DebugProtocol.Variable = {
 						name: `${arrayIndex}`,
 						value: '',
-						variablesReference: this.currentVarRef
+						variablesReference: this.currentVarRef,
+						presentationHint: { kind: 'innerClass' }
 					};
 					this.parentVarsMap.set(this.currentVarRef, newVar);
 					const parsed = await this.parseDumper(lines.slice(i + 1));
 					i += parsed[0];
 					newVar.value = parsed[1];
+					newVar.type = parsed[1];
 					cv.push(newVar);
 					arrayIndex++;
 					continue;
 				}
 				matched = line.match(this.isNewNested);
 				if (matched) {
-					const newVar: Variable = {
+					const newVar: DebugProtocol.Variable = {
 						name: matched[1],
 						value: '',
-						variablesReference: this.currentVarRef
+						variablesReference: this.currentVarRef,
+						presentationHint: { kind: 'innerClass' }
 					};
 					this.parentVarsMap.set(this.currentVarRef, newVar);
 					const parsed = await this.parseDumper(lines.slice(i + 1));
 					i += parsed[0];
 					newVar.value = parsed[1];
+					newVar.type = parsed[1];
 					cv.push(newVar);
 					continue;
 				}
@@ -769,7 +780,7 @@ export class PerlDebugSession extends LoggingDebugSession {
 			response.success = false;
 		} else {
 			const value = (await this.request(`print STDERR Data::Dumper->new([${(expressionToChange.startsWith('@') ? `[${expressionToChange}]` : (expressionToChange.startsWith('%') ? `{${expressionToChange}}` : expressionToChange))}], [])->Useqq(1)->Terse(1)->Dump()`)).slice(1, -1).join(' ');
-			response.body = { value: `${value}` };
+			response.body = { value: `${value.trim()}` };
 		}
 		this.sendResponse(response);
 	}
