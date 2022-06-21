@@ -2,7 +2,6 @@ import {
 	Breakpoint, Handles, InitializedEvent, logger, Logger, LoggingDebugSession, OutputEvent, Scope, Source, StackFrame, StoppedEvent, TerminatedEvent, Thread, Variable
 } from '@vscode/debugadapter';
 import { DebugProtocol } from '@vscode/debugprotocol';
-import { Subject } from 'await-notify';
 import { ChildProcess, spawn, SpawnOptions } from 'child_process';
 import { basename, dirname, join } from 'path';
 import { ansiSeq, StreamCatcher } from './streamCatcher';
@@ -32,8 +31,6 @@ export class PerlDebugSession extends LoggingDebugSession {
 	private static threadId = 1;
 	private currentVarRef = 999;
 	private currentBreakpointID = 1;
-
-	private _configurationDone = new Subject();
 
 	private _variableHandles = new Handles<'my' | 'our' | 'special'>();
 	private childVarsMap = new Map<number, Variable[]>();
@@ -252,9 +249,6 @@ export class PerlDebugSession extends LoggingDebugSession {
 	 */
 	protected configurationDoneRequest(response: DebugProtocol.ConfigurationDoneResponse, args: DebugProtocol.ConfigurationDoneArguments): void {
 		super.configurationDoneRequest(response, args);
-
-		// notify the launchRequest that configuration has finished
-		this._configurationDone.notify();
 	}
 
 	protected async launchRequest(response: DebugProtocol.LaunchResponse, args: ILaunchRequestArguments) {
@@ -271,9 +265,6 @@ export class PerlDebugSession extends LoggingDebugSession {
 		// TODO: control logging via launch.json file
 		// setup logger
 		logger.setup(Logger.LogLevel.Warn, false);
-
-		// wait 1 second until configuration has finished (and configurationDoneRequest has been called)
-		await this._configurationDone.wait(1000);
 
 		// start the program in the runtime
 		// Spawn perl process and handle errors
