@@ -173,6 +173,56 @@ export class PerlDebugSession extends LoggingDebugSession {
 	}
 
 	/**
+	 * Builds a variables expression using its parents ID and name.
+	 */
+	private getExpression(id: number, expression: string): string {
+		let lastParent: Variable | undefined = this.childVarsMap.get(id)?.find(e => { return e.name === expression; });
+		if (lastParent) {
+			let parentVars: Variable[] = [lastParent!];
+			let parent: Variable | undefined;
+			while ((parent = this.parentVarsMap.get(id)) && lastParent) {
+				const childsOfParent = this.childVarsMap.get(id);
+				if (parent && childsOfParent!.includes(lastParent)) {
+					parentVars.push(parent);
+					// we need to store the last parent variable to find the parent of the lastParent
+					lastParent = parent;
+				}
+				id++;
+			}
+			// Now we can build the expression
+			let currentType = parentVars[parentVars.length-1].value.match(/^(ARRAY|HASH)/)![1];
+			for (let i = parentVars.length-1; i > -1; i--) {
+				const parentVar = parentVars[i];
+				if (i === parentVars.length-1) {
+					if (parentVar.name.startsWith('$')) {
+						// if a nested variable starts with a dollar sign it has to be an object so the arrow is neccesarry
+						expression = `${parentVar.name}->`;
+					} else if (parentVar.name.match(/^[%|@]/)) {
+						// accessing hash and array values requires a dollar sign at the start
+						expression = `${parentVar.name.replace(/^[%|@]/, '$')}`;
+					} else {
+						expression = parentVar.name;
+					}
+				} else {
+					switch (currentType) {
+						case 'ARRAY':
+							expression = `${expression}[${parentVar.name}]`;
+							break;
+						case 'HASH':
+							expression = `${(expression.endsWith(']') ? `${expression}->` : expression)}{'${parentVar.name}'}`;
+							break;
+						default:
+							logger.error(`Unknown variable type: ${currentType}`);
+							break;
+					}
+					currentType = parentVar.value.match(/(^ARRAY|^HASH|.*)/)![1];
+				}
+			}
+		}
+		return expression;
+	}
+
+	/**
 	 * The 'initialize' request is the first request called by the frontend
 	 * to interrogate the features the debug adapter provides.
 	 */
@@ -503,9 +553,13 @@ export class PerlDebugSession extends LoggingDebugSession {
 				parsedVars = await this.parseVars(varNames);
 			}
 		} else {
-			// Get already parsed vars from map
-			const newVars = this.childVarsMap.get(args.variablesReference);
+			// get already parsed vars from map
+			const newVars: DebugProtocol.Variable[] | undefined = this.childVarsMap.get(args.variablesReference);
+			// build expressions only for the variables which are displayed as it can be kinda costly
 			if (newVars) {
+				for (let i = 0; i < newVars.length; i++) {
+					newVars[i].evaluateName = this.getExpression(args.variablesReference, newVars[i].name);
+				}
 				parsedVars = parsedVars.concat(newVars);
 			}
 		}
@@ -534,7 +588,8 @@ export class PerlDebugSession extends LoggingDebugSession {
 		}
 
 		// get variable value
-		const evaledVar = (await this.parseVars([varName]))[0];
+		const evaledVar: DebugProtocol.Variable = (await this.parseVars([varName]))[0];
+		evaledVar.evaluateName = this.getExpression(evaledVar.variablesReference, evaledVar.name);
 
 		try {
 			response.body = {
@@ -549,7 +604,7 @@ export class PerlDebugSession extends LoggingDebugSession {
 	}
 
 	private async parseVars(varNames: string[]): Promise<Variable[]> {
-		let vs: Variable[] = [];
+		let vs: DebugProtocol.Variable[] = [];
 		for (let i = 0; i < varNames.length; i++) {
 			let varName = varNames[i];
 			if (varName.startsWith('@')) {
@@ -590,16 +645,20 @@ export class PerlDebugSession extends LoggingDebugSession {
 						vs.push({
 							name: varNames[i],
 							value: `${matched[2]}`,
-							variablesReference: 0
+							variablesReference: 0,
+							evaluateName: varNames[i],
+							presentationHint: { kind: 'data' }
 						});
 					} else {
 						this.currentVarRef--;
 						const matched = varDump[varDump.length - 1].trim().match(this.isVarEnd);
 						const value = `${(matched![1] === '}' ? 'HASH' : 'ARRAY')}${(matched![3] ? ` ${matched![3]}` : '')}`;
-						const newVar: Variable = {
+						const newVar: DebugProtocol.Variable = {
 							name: varNames[i],
 							value: value,
-							variablesReference: this.currentVarRef
+							variablesReference: this.currentVarRef,
+							evaluateName: varNames[i],
+							presentationHint: { kind: 'baseClass' }
 						};
 						vs.push(newVar);
 						this.parentVarsMap.set(this.currentVarRef, newVar);
@@ -609,7 +668,8 @@ export class PerlDebugSession extends LoggingDebugSession {
 					vs.push({
 						name: varNames[i],
 						value: 'undef',
-						variablesReference: 0
+						variablesReference: 0,
+						presentationHint: { kind: 'data' }
 					});
 				}
 			} catch (error: any) {
@@ -617,7 +677,8 @@ export class PerlDebugSession extends LoggingDebugSession {
 				vs.push({
 					name: varNames[i],
 					value: 'undef',
-					variablesReference: 0
+					variablesReference: 0,
+					presentationHint: { kind: 'data' }
 				});
 			}
 		}
@@ -704,53 +765,7 @@ export class PerlDebugSession extends LoggingDebugSession {
 	}
 
 	protected async setVariableRequest(response: DebugProtocol.SetVariableResponse, args: DebugProtocol.SetVariableArguments): Promise<void> {
-		let currentVarRef = args.variablesReference;
-		let expressionToChange: string = args.name;
-
-		if (this.parentVarsMap.has(currentVarRef)) {
-			let lastParent: Variable | undefined = this.childVarsMap.get(currentVarRef)!.find(e => { return e.name === args.name; });
-			let parentVars: Variable[] = [lastParent!];
-			let parent: Variable | undefined;
-			while ((parent = this.parentVarsMap.get(currentVarRef)) && lastParent) {
-				const childsOfParent = this.childVarsMap.get(currentVarRef);
-				if (parent && childsOfParent!.includes(lastParent)) {
-					parentVars.push(parent);
-					// we need to store the last parent variable to find the parent of the lastParent
-					lastParent = parent;
-				}
-				currentVarRef++;
-			}
-			// Now we can build the expression
-			parentVars = parentVars.reverse();
-			let currentType = parentVars[0].value.match(/(^ARRAY|^HASH)/)![1];
-			for (let i = 0; i < parentVars.length; i++) {
-				const parentVar = parentVars[i];
-				if (i === 0) {
-					if (parentVar.name.startsWith('$')) {
-						// if a nested variable starts with a dollar sign it has to be an object so the arrow is neccesarry
-						expressionToChange = `${parentVar.name}->`;
-					} else if (parentVar.name.startsWith('%')) {
-						// accessing hash values requires a dollar sign at the start
-						expressionToChange = `${parentVar.name.replace(/^%/, '$')}`;
-					} else {
-						expressionToChange = parentVar.name;
-					}
-				} else {
-					switch (currentType) {
-						case 'ARRAY':
-							expressionToChange = `${expressionToChange}[${parentVar.name}]`;
-							break;
-						case 'HASH':
-							expressionToChange = `${(expressionToChange.endsWith(']') ? `${expressionToChange}->` : expressionToChange)}{'${parentVar.name}'}`;
-							break;
-						default:
-							logger.error(`Unknown variable type: ${currentType}`);
-							break;
-					}
-					currentType = parentVar.value.match(/(^ARRAY|^HASH|.*)/)![1];
-				}
-			}
-		}
+		const expressionToChange: string = this.getExpression(args.variablesReference, args.name);
 		const lines = (await this.request(`${expressionToChange} = ${args.value}`)).filter(e => { return e !== ''; });
 		if (lines.slice(1, -1).length > 0) {
 			this.sendEvent(new OutputEvent(`Error setting value: ${lines.join(' ')}`, 'important'));
