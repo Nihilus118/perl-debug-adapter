@@ -388,7 +388,7 @@ export class PerlDebugSession extends LoggingDebugSession {
 		const argBps = args.breakpoints!;
 		this.currentBreakpointID = 1;
 
-		// setting breakpoints is only possible if the runtime is currently active and the scipt is already loaded
+		// setting breakpoints is only possible if the runtime is currently active and the script is already loaded
 		if (this.isActive() && await this.changeFileContext(scriptPath)) {
 			// first we clear all existing breakpoints inside the file
 			await this.removeBreakpointsInFile(scriptPath);
