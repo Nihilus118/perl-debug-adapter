@@ -13,7 +13,8 @@ interface ILaunchRequestArguments extends DebugProtocol.LaunchRequestArguments {
 	debug?: boolean;
 	cwd?: string;
 	args?: string[];
-	env?: object[];
+	env?: { [key: string]: string; };
+	trace: boolean;
 }
 
 interface IFunctionBreakpointData {
@@ -187,10 +188,10 @@ export class PerlDebugSession extends LoggingDebugSession {
 				id++;
 			}
 			// Now we can build the expression
-			let currentType = parentVars[parentVars.length-1].value.match(/^(ARRAY|HASH)/)![1];
-			for (let i = parentVars.length-1; i > -1; i--) {
+			let currentType = parentVars[parentVars.length - 1].value.match(/^(ARRAY|HASH)/)![1];
+			for (let i = parentVars.length - 1; i > -1; i--) {
 				const parentVar = parentVars[i];
-				if (i === parentVars.length-1) {
+				if (i === parentVars.length - 1) {
 					if (parentVar.name.startsWith('$')) {
 						// if a nested variable starts with a dollar sign it has to be an object so the arrow is neccesarry
 						expression = `${parentVar.name}->`;
@@ -262,25 +263,30 @@ export class PerlDebugSession extends LoggingDebugSession {
 		args.cwd = this.normalizePathAndCasing(args.cwd || dirname(args.program));
 		this.cwd = args.cwd;
 
-		// TODO: control logging via launch.json file
 		// setup logger
-		logger.setup(Logger.LogLevel.Warn, false);
+		if (args.trace === true) {
+			logger.setup(Logger.LogLevel.Log, false);
+		} else {
+			logger.setup(Logger.LogLevel.Warn, false);
+		}
 
 		// start the program in the runtime
 		// Spawn perl process and handle errors
 		logger.log(`CWD: ${args.cwd}`);
+		let env: NodeJS.ProcessEnv = {
+			...process.env,
+			...args.env,
+			// eslint-disable-next-line @typescript-eslint/naming-convention
+			COLUMNS: '80',
+			// eslint-disable-next-line @typescript-eslint/naming-convention
+			LINES: '25',
+			// eslint-disable-next-line @typescript-eslint/naming-convention
+			TERM: 'dumb'
+		};
 		const spawnOptions: SpawnOptions = {
 			detached: true,
 			cwd: args.cwd,
-			env: {
-				...process.env,
-				// eslint-disable-next-line @typescript-eslint/naming-convention
-				COLUMNS: '80',
-				// eslint-disable-next-line @typescript-eslint/naming-convention
-				LINES: '25',
-				// eslint-disable-next-line @typescript-eslint/naming-convention
-				TERM: 'dumb'
-			},
+			env: env
 		};
 
 		args.program = this.normalizePathAndCasing(args.program);

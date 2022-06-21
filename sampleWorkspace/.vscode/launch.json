@@ -17,7 +17,10 @@
 				123,
 				true,
 				"log=testfile.log"
-			]
+			],
+			"env": {
+				"HalloWelt": "Hallo Welt",
+			}
 		}
 	]
 }

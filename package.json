@@ -142,17 +142,26 @@
               },
               "perlExecutable": {
                 "type": "string",
-                "description": "Path to perl executable."
+                "description": "Path to perl executable.",
+                "default": "perl"
               },
               "args": {
                 "type": "array",
                 "description": "Arguments passed at program launch.",
                 "default": []
               },
+              "env": {
+                "type": "object",
+                "description": "Environment variables passed to the program.",
+                "default": {},
+                "additionalProperties": {
+                  "type": "string"
+                }
+              },
               "trace": {
                 "type": "boolean",
-                "description": "Enable logging of the Debug Adapter Protocol.",
-                "default": true
+                "description": "Enable verbose logging of the Debug Adapter.",
+                "default": false
               }
             }
           }
