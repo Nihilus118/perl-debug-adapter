@@ -637,7 +637,7 @@ export class PerlDebugSession extends LoggingDebugSession {
 			try {
 				if (varDump[0]) {
 					varDump[0] = varDump[0].replace(/=/, '=>');
-					const matched = varDump[0].match(this.isScalar);
+					const matched = varDump[0].match(this.isNamedVariable);
 					if (matched && varDump.length === 1) {
 						vs.push({
 							name: varNames[i],
@@ -649,18 +649,24 @@ export class PerlDebugSession extends LoggingDebugSession {
 						});
 					} else {
 						this.currentVarRef--;
+						const ref = this.currentVarRef;
+						await this.parseDumper(varDump.slice(1, -1));
 						const matched = varDump[varDump.length - 1].trim().match(this.isVarEnd);
+						const type = `${(matched![1] === '}' ? 'HASH' : 'ARRAY')}${(matched![3] ? ` ${matched![3]}` : '')}`;
 						const newVar: DebugProtocol.Variable = {
 							name: varNames[i],
-							value: `${(matched![1] === '}' ? 'HASH' : 'ARRAY')}${(matched![3] ? ` ${matched![3]}` : '')}`,
-							variablesReference: this.currentVarRef,
+							value: type,
+							variablesReference: ref,
 							evaluateName: varNames[i],
-							presentationHint: { kind: 'baseClass' },
-							type: `${(matched![1] === '}' ? 'HASH' : 'ARRAY')}${(matched![3] ? ` ${matched![3]}` : '')}`
+							presentationHint: { kind: 'baseClass' }
 						};
+						if (type.startsWith('HASH')) {
+							newVar.namedVariables = this.childVarsMap.get(ref)?.length;
+						} else if (type.startsWith('ARRAY')) {
+							newVar.indexedVariables = this.childVarsMap.get(ref)?.length;
+						}
 						vs.push(newVar);
-						this.parentVarsMap.set(this.currentVarRef, newVar);
-						await this.parseDumper(varDump.slice(1, -1));
+						this.parentVarsMap.set(ref, newVar);
 					}
 				} else {
 					vs.push({
@@ -688,13 +694,13 @@ export class PerlDebugSession extends LoggingDebugSession {
 	}
 
 	// Regexp for parsing the output of Data::Dumper
-	private isScalar = /"?(.*)"?\s=>?\s(undef|".*"|-?\d+|\[\]|\{\}|bless\(.*\)|sub\s\{.*\}|\\\*\{".*\"}|\\{1,2}\*.*)[,|;]$/;
-	private isNewNested = /"(.*)"\s=>?\s(bless\(\s)?(\[|\{)/;
-	private isNestedArrayPosition = /^(bless\(\s*)?(\{|\[)$/;
-	private isArrayPosition = /^(undef|".*"|-?\d+|\[\]|\{\}|bless\(.*\)|sub\s\{.*\})[,|;]/;
+	private isNamedVariable = /"?(.*)"?\s=>?\s(undef|".*"|-?\d+|\[\]|\{\}|bless\(.*\)|sub\s\{.*\}|\\\*\{".*\"}|\\{1,2}\*.*)[,|;]$/;
+	private isIndexedVariable = /^(undef|".*"|-?\d+|\[\]|\{\}|bless\(.*\)|sub\s\{.*\})[,|;]/;
+	private isNestedHash = /"(.*)"\s=>?\s(bless\(\s)?(\[|\{)/;
+	private isNestedArray = /^(bless\(\s*)?(\{|\[)$/;
 	private isVarEnd = /^(\}|\]),?(\s?'(.*)'\s\))?[,|;]/;
 	// Parse output of Data::Dumper
-	private async parseDumper(lines: string[]): Promise<[number, string]> {
+	private async parseDumper(lines: string[]): Promise<{ parsedLines: number, varType: string, numChildVars: number; }> {
 		let cv: DebugProtocol.Variable[] = [];
 		let varType = '';
 		let arrayIndex = 0;
@@ -709,7 +715,7 @@ export class PerlDebugSession extends LoggingDebugSession {
 				varType = `${(matched[1] === '}' ? 'HASH' : 'ARRAY')}${(matched[3] ? ` ${matched[3]}` : '')}`;
 				break;
 			} else {
-				matched = line.match(this.isScalar);
+				matched = line.match(this.isNamedVariable);
 				if (matched) {
 					cv.push({
 						name: matched[1].replace(/"/, ''),
@@ -720,7 +726,7 @@ export class PerlDebugSession extends LoggingDebugSession {
 					});
 					continue;
 				}
-				matched = line.match(this.isArrayPosition);
+				matched = line.match(this.isIndexedVariable);
 				if (matched) {
 					cv.push({
 						name: `${arrayIndex}`,
@@ -732,7 +738,7 @@ export class PerlDebugSession extends LoggingDebugSession {
 					arrayIndex++;
 					continue;
 				}
-				matched = line.match(this.isNestedArrayPosition);
+				matched = line.match(this.isNestedArray);
 				if (matched) {
 					const newVar: DebugProtocol.Variable = {
 						name: `${arrayIndex}`,
@@ -742,14 +748,15 @@ export class PerlDebugSession extends LoggingDebugSession {
 					};
 					this.parentVarsMap.set(this.currentVarRef, newVar);
 					const parsed = await this.parseDumper(lines.slice(i + 1));
-					i += parsed[0];
-					newVar.value = parsed[1];
-					newVar.type = parsed[1];
+					i += parsed.parsedLines;
+					newVar.value = parsed.varType;
+					newVar.type = parsed.varType;
+					newVar.indexedVariables = parsed.numChildVars;
 					cv.push(newVar);
 					arrayIndex++;
 					continue;
 				}
-				matched = line.match(this.isNewNested);
+				matched = line.match(this.isNestedHash);
 				if (matched) {
 					const newVar: DebugProtocol.Variable = {
 						name: matched[1],
@@ -759,9 +766,10 @@ export class PerlDebugSession extends LoggingDebugSession {
 					};
 					this.parentVarsMap.set(this.currentVarRef, newVar);
 					const parsed = await this.parseDumper(lines.slice(i + 1));
-					i += parsed[0];
-					newVar.value = parsed[1];
-					newVar.type = parsed[1];
+					i += parsed.parsedLines;
+					newVar.value = parsed.varType;
+					newVar.type = parsed.varType;
+					newVar.namedVariables = parsed.numChildVars;
 					cv.push(newVar);
 					continue;
 				}
@@ -769,7 +777,7 @@ export class PerlDebugSession extends LoggingDebugSession {
 			}
 		}
 		this.childVarsMap.set(ref, cv);
-		return [i + 1, varType];
+		return { parsedLines: i + 1, varType: varType, numChildVars: cv.length };
 	}
 
 	protected async setVariableRequest(response: DebugProtocol.SetVariableResponse, args: DebugProtocol.SetVariableArguments): Promise<void> {
