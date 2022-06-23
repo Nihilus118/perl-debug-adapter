@@ -14,7 +14,8 @@ interface ILaunchRequestArguments extends DebugProtocol.LaunchRequestArguments {
 	cwd?: string;
 	args?: string[];
 	env?: { [key: string]: string; };
-	trace: boolean;
+	threaded?: boolean;
+	trace?: boolean;
 }
 
 interface IFunctionBreakpointData {
@@ -292,7 +293,7 @@ export class PerlDebugSession extends LoggingDebugSession {
 		args.program = this.normalizePathAndCasing(args.program);
 		logger.log(`Script: ${args.program}`);
 		const commandArgs = [
-			'-d',
+			(args.threaded === true ? '-dt' : '-d'),
 			args.program,
 			...args.args || []
 		];
@@ -437,13 +438,17 @@ export class PerlDebugSession extends LoggingDebugSession {
 		this.sendResponse(response);
 	}
 
-	protected threadsRequest(response: DebugProtocol.ThreadsResponse): void {
-
-		// runtime supports no threads so just return a default thread.
+	protected async threadsRequest(response: DebugProtocol.ThreadsResponse): Promise<void> {
+		// Get only the current ThreadID as the builtin 'E'-Command can break the debugger process
+		let thread: Thread;
+		const matched = (await this.request('print STDERR threads->self()->tid()'))[1].trim().match(/^(\d+)$/);
+		if (matched) {
+			thread = new Thread(PerlDebugSession.threadId, `thread ${matched[1]}`);
+		} else {
+			thread = new Thread(PerlDebugSession.threadId, 'thread 0');
+		}
 		response.body = {
-			threads: [
-				new Thread(PerlDebugSession.threadId, 'thread 1')
-			]
+			threads: [thread]
 		};
 		this.sendResponse(response);
 	}

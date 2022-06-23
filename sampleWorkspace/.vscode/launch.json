@@ -21,6 +21,16 @@
 			"env": {
 				"HalloWelt": "Hallo Welt",
 			}
+		},
+		{
+			"type": "perl",
+			"request": "launch",
+			"name": "Perl Debug Threaded",
+			"program": "${workspaceFolder}/threads.pl",
+			"stopOnEntry": true,
+			"debug": true,
+			"cwd": "${workspaceFolder}",
+			"threaded": true
 		}
 	]
 }

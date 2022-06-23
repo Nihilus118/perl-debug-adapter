@@ -162,6 +162,11 @@
                 "type": "boolean",
                 "description": "Enable verbose logging of the Debug Adapter.",
                 "default": false
+              },
+              "threaded": {
+                "type": "boolean",
+                "description": "Enable threaded debugging (perl -dt).",
+                "default": false
               }
             }
           }
