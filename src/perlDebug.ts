@@ -335,8 +335,8 @@ export class PerlDebugSession extends LoggingDebugSession {
 		if (args.debug === true || args.debug === undefined) {
 			logger.log('Starting debugging');
 
-			// stop when loading a new file
-			await this.request('package DB; *DB::postponed = sub { return sub { if ( \'GLOB\' eq ref(\\$_[0]) && $_[0] =~ /<(.*)\\s*$/s) { $DB::single = 1; print STDERR "loaded source $1\\n"; } } ; }->(\\\\&DB::postponed)');
+			// stop when loading a new file and check if we can call continue after the stop
+			await this.request('package DB; *DB::postponed = sub { return sub { if ( \'GLOB\' eq ref(\\$_[0]) && $_[0] =~ /<(.*)\\s*$/s) { if ($DB::single == 0) { print STDERR "continue "; } $DB::single = 1; print STDERR "loaded source $1\\n"; } } ; }->(\\\\&DB::postponed)');
 
 			// use PadWalker to list variables in scope and Data::Dumper for accessing variable values
 			const lines = await this.request('use PadWalker qw/peek_our peek_my/; use Data::Dumper;');
@@ -779,6 +779,7 @@ export class PerlDebugSession extends LoggingDebugSession {
 					continue;
 				}
 				logger.error(`Unrecognized Data::Dumper line: ${line}`);
+				logger.error(`All lines in current variable scope: ${lines.join('\n')}`);
 			}
 		}
 		this.childVarsMap.set(ref, cv);
@@ -817,7 +818,8 @@ export class PerlDebugSession extends LoggingDebugSession {
 		this.sendResponse(response);
 	}
 
-	private async postExecution(lines: string[]): Promise<void> {
+	private async execute(cmd: string): Promise<void> {
+		const lines = await this.request(cmd);
 		const scriptOutput = lines.slice(1, lines.findIndex(e => { return e.match(/main::.*|Debugged program terminated|loaded source/); }));
 		if (scriptOutput.filter(e => { return e !== ''; }).length > 0) {
 			this.sendEvent(new OutputEvent(scriptOutput.join('\n'), 'stderr'));
@@ -829,9 +831,11 @@ export class PerlDebugSession extends LoggingDebugSession {
 			this.sendEvent(new TerminatedEvent());
 			return;
 		}
-		// set breakpoints if new file is loaded which contains breakpoints
+		// the reason why the debugger paused the execution
+		let reason: string;
 		const newSource = lines.find(ln => { return ln.match(/loaded source/); });
 		if (newSource) {
+			// set breakpoints in newly loaded file
 			const matched = newSource.match(/loaded source (.*)/);
 			if (matched) {
 				let scriptPath = matched[1]!;
@@ -843,7 +847,7 @@ export class PerlDebugSession extends LoggingDebugSession {
 				if (bps) {
 					await this.setBreakpointsInFile(scriptPath, bps);
 					// check if we already reached a breakpoint at current position
-					// -> this can happen if the breakpoint is located at the first breakable line inside a file
+					// this can happen if the breakpoint is located at the first breakable line inside a file
 					const currentLine = (await this.getStackFrames())[0].line;
 					for (let i = 0; i < bps.length; i++) {
 						const bp = bps[i];
@@ -853,29 +857,39 @@ export class PerlDebugSession extends LoggingDebugSession {
 						}
 					}
 				}
-				// we continue until we hit another breakpoint, exception or new source
+			}
+			if (newSource.startsWith('continue') && (cmd === 'n' || cmd === 'c')) {
+				// just continue if the current command is continue or step over and the debugger allows it
 				await this.continue();
-
+				return;
+			} else {
+				// else we stop on reaching a new source
+				reason = 'new source';
 			}
 		} else {
-			this.sendEvent(new StoppedEvent('breakpoint', PerlDebugSession.threadId));
+			if (cmd === 'c') {
+				reason = 'breakpoint';
+			} else {
+				reason = 'step';
+			}
 		}
+		this.sendEvent(new StoppedEvent(reason, PerlDebugSession.threadId));
 	}
 
 	private async continue() {
-		await this.postExecution(await this.request('c'));
+		await this.execute('c');
 	}
 
 	private async step() {
-		await this.postExecution(await this.request('n'));
+		await this.execute('n');
 	}
 
 	private async stepIn() {
-		await this.postExecution(await this.request('s'));
+		await this.execute('s');
 	}
 
 	private async stepOut() {
-		await this.postExecution(await this.request('r'));
+		await this.execute('r');
 	}
 
 	protected continueRequest(response: DebugProtocol.ContinueResponse, _args: DebugProtocol.ContinueArguments): void {
