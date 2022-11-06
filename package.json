@@ -29,6 +29,7 @@
     "url": "https://github.com/Nihilus118/vscode-perl-debug"
   },
   "scripts": {
+    "test": "jest",
     "compile": "tsc -p ./",
     "lint": "eslint src --ext ts",
     "esbuild-base": "esbuild ./src/extension.ts --bundle --tsconfig=./tsconfig.json --external:vscode --format=cjs --platform=node --outfile=dist/extension.js",
@@ -38,6 +39,7 @@
     "publish": "vsce publish"
   },
   "devDependencies": {
+    "@types/jest": "^29.2.2",
     "@types/node": "^14.14.37",
     "@types/vscode": "^1.64.0",
     "@typescript-eslint/eslint-plugin": "^5.12.0",
@@ -46,8 +48,9 @@
     "@vscode/debugadapter-testsupport": "^1.55.0-pre.1",
     "esbuild": "^0.14.21",
     "eslint": "^8.9.0",
-    "typescript": "^4.5.5",
-    "vsce": "^2.6.7"
+    "jest": "^29.2.2",
+    "ts-jest": "^29.0.3",
+    "typescript": "^4.5.5"
   },
   "main": "./dist/extension.js",
   "activationEvents": [
