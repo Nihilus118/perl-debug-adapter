@@ -298,6 +298,12 @@ export class PerlDebugSession extends LoggingDebugSession {
 			...args.args || []
 		];
 
+		// was the last session already killed?
+		if (this._session && !this._session.killed) {
+			this._session.kill();
+		}
+
+		// launch the debugger
 		args.perlExecutable = args.perlExecutable || 'perl';
 		logger.log(`Perl executable: ${args.perlExecutable}`);
 		this._session = spawn(
@@ -310,6 +316,15 @@ export class PerlDebugSession extends LoggingDebugSession {
 			const text = `Couldn not spawn the child process! Command: ${args.perlExecutable}\nCode: ${err.name}\nError: ${err.message}`;
 			logger.error(text);
 			this.sendEvent(new OutputEvent(text, 'important'));
+			this.sendEvent(new TerminatedEvent());
+			return;
+		});
+
+		this._session.on('close', code => {
+			const text = `Debugger closed unexpectedly! Code: ${code}\n${this.streamCatcher.getBuffer().join('\n')}`;
+			logger.error(text);
+			this.sendEvent(new OutputEvent(text, 'important'));
+			this.sendEvent(new OutputEvent(text, 'stderr'));
 			this.sendEvent(new TerminatedEvent());
 			return;
 		});
@@ -369,31 +384,36 @@ export class PerlDebugSession extends LoggingDebugSession {
 			if (args.stopOnEntry) {
 				this.sendEvent(new StoppedEvent('entry', PerlDebugSession.threadId));
 			} else {
-				await this.continue();
+				this.continue();
 			}
 		} else {
 			// Just run
 			logger.log('Running script');
-			await this.continue();
+			this.continue();
 		}
 
 		this.sendResponse(response);
 	}
 
-	protected async setBreakPointsRequest(response: DebugProtocol.SetBreakpointsResponse, args: DebugProtocol.SetBreakpointsArguments): Promise<void> {
+	protected setBreakPointsRequest(response: DebugProtocol.SetBreakpointsResponse, args: DebugProtocol.SetBreakpointsArguments): void {
 		// save breakpoints in memory and either hand them over in the launch request later or set them now if the runtime is active
 		const scriptPath = args.source.path as string;
 		const argBps = args.breakpoints!;
 		this.currentBreakpointID = 1;
 
 		// setting breakpoints is only possible if the runtime is currently active and the script is already loaded
-		if (this.isActive() && await this.changeFileContext(scriptPath)) {
-			// first we clear all existing breakpoints inside the file
-			await this.removeBreakpointsInFile(scriptPath);
-			// now we try to set every breakpoint requested
-			response.body = {
-				breakpoints: await this.setBreakpointsInFile(scriptPath, argBps)
-			};
+		if (this.isActive()) {
+			this.changeFileContext(scriptPath).then(() => {
+				// first we clear all existing breakpoints inside the file
+				this.removeBreakpointsInFile(scriptPath).then(() => {
+					// now we try to set every breakpoint requested
+					this.setBreakpointsInFile(scriptPath, argBps).then((bps) => {
+						response.body = {
+							breakpoints: bps
+						};
+					});
+				});
+			});
 		} else {
 			logger.log('Can not set breakpoints. Runtime is not active yet or file not yet loaded');
 			// save breakpoints inside the map
@@ -485,7 +505,6 @@ export class PerlDebugSession extends LoggingDebugSession {
 	}
 
 	protected scopesRequest(response: DebugProtocol.ScopesResponse, args: DebugProtocol.ScopesArguments): void {
-
 		response.body = {
 			scopes: [
 				new Scope('My', this._variableHandles.create('my'), false),
@@ -500,7 +519,7 @@ export class PerlDebugSession extends LoggingDebugSession {
 		this.sendResponse(response);
 	}
 
-	protected async variablesRequest(response: DebugProtocol.VariablesResponse, args: DebugProtocol.VariablesArguments, request?: DebugProtocol.Request): Promise<void> {
+	protected async variablesRequest(response: DebugProtocol.VariablesResponse, args: DebugProtocol.VariablesArguments, _request?: DebugProtocol.Request): Promise<void> {
 		let varNames: string[] = [];
 		let parsedVars: Variable[] = [];
 		const handle = this._variableHandles.get(args.variablesReference);
@@ -860,7 +879,7 @@ export class PerlDebugSession extends LoggingDebugSession {
 			}
 			if (newSource.startsWith('continue') && (cmd === 'n' || cmd === 'c')) {
 				// just continue if the current command is continue or step over and the debugger allows it
-				await this.continue();
+				this.continue();
 				return;
 			} else {
 				// else we stop on reaching a new source
@@ -876,50 +895,73 @@ export class PerlDebugSession extends LoggingDebugSession {
 		this.sendEvent(new StoppedEvent(reason, PerlDebugSession.threadId));
 	}
 
-	private async continue() {
-		await this.execute('c');
+	private continue(): boolean {
+		let success = true;
+		this.execute('c').catch((err) => {
+			success = false;
+			logger.error(`continue: ${err}`);
+		});
+		return success;
 	}
 
-	private async step() {
-		await this.execute('n');
+	private step(): boolean {
+		let success = true;
+		this.execute('n').catch((err) => {
+			success = false;
+			logger.error(`step: ${err}`);
+		});
+		return success;
 	}
 
-	private async stepIn() {
-		await this.execute('s');
+	private stepIn(): boolean {
+		let success = true;
+		this.execute('s').catch((err) => {
+			success = false;
+			logger.error(`stepIn: ${err}`);
+		});
+		return success;
 	}
 
-	private async stepOut() {
-		await this.execute('r');
+	private stepOut(): boolean {
+		let success = true;
+		this.execute('r').catch((err) => {
+			success = false;
+			logger.error(`stepOut: ${err}`);
+		});
+		return success;
 	}
 
 	protected continueRequest(response: DebugProtocol.ContinueResponse, _args: DebugProtocol.ContinueArguments): void {
-		this.continue();
+		response.success = this.continue();
 		this.sendResponse(response);
 	}
 
 	protected nextRequest(response: DebugProtocol.NextResponse, _args: DebugProtocol.NextArguments): void {
-		this.step();
+		response.success = this.step();
 		this.sendResponse(response);
 	}
 
 	protected stepInRequest(response: DebugProtocol.StepInResponse, _args: DebugProtocol.StepInArguments): void {
-		this.stepIn();
+		response.success = this.stepIn();
 		this.sendResponse(response);
 	}
 
 	protected stepOutRequest(response: DebugProtocol.StepOutResponse, _args: DebugProtocol.StepOutArguments, _request?: DebugProtocol.Request): void {
-		this.stepOut();
+		response.success = this.stepOut();
 		this.sendResponse(response);
 	}
 
 	protected restartRequest(response: DebugProtocol.RestartResponse, _args: DebugProtocol.RestartArguments, _request?: DebugProtocol.Request): void {
+		this.request('q');
 		this.streamCatcher.destroy();
+		this._session.kill();
 		this.sendResponse(response);
 	}
 
 	protected terminateRequest(response: DebugProtocol.TerminateResponse, _args: DebugProtocol.TerminateArguments, _request?: DebugProtocol.Request): void {
 		this.request('q');
 		this.streamCatcher.destroy();
+		this._session.kill();
 		this.sendResponse(response);
 	}
 }
