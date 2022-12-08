@@ -350,6 +350,9 @@ export class PerlDebugSession extends LoggingDebugSession {
 		if (args.debug === true || args.debug === undefined) {
 			logger.log('Starting debugging');
 
+			// dont print any preview to the debug console
+			await this.request('package DB; $DB::preview = 0;');
+
 			// stop when loading a new file and check if we can call continue after the stop
 			await this.request('package DB; *DB::postponed = sub { return sub { if ( \'GLOB\' eq ref(\\$_[0]) && $_[0] =~ /<(.*)\\s*$/s) { if ($DB::single == 0) { print STDERR "continue "; } $DB::single = 1; print STDERR "loaded source $1\\n"; } } ; }->(\\\\&DB::postponed)');
 
