@@ -400,45 +400,44 @@ export class PerlDebugSession extends LoggingDebugSession {
 
 	protected setBreakPointsRequest(response: DebugProtocol.SetBreakpointsResponse, args: DebugProtocol.SetBreakpointsArguments): void {
 		// save breakpoints in memory and either hand them over in the launch request later or set them now if the runtime is active
-		const scriptPath = args.source.path as string;
-		const argBps = args.breakpoints!;
-		this.currentBreakpointID = 1;
+		(async () => {
+			const scriptPath = args.source.path as string;
+			const argBps = args.breakpoints!;
+			this.currentBreakpointID = 1;
 
-		// setting breakpoints is only possible if the runtime is currently active and the script is already loaded
-		if (this.isActive()) {
-			this.changeFileContext(scriptPath).then(() => {
+			// setting breakpoints is only possible if the runtime is currently active and the script is already loaded
+			if (this.isActive() && await this.changeFileContext(scriptPath)) {
 				// first we clear all existing breakpoints inside the file
-				this.removeBreakpointsInFile(scriptPath).then(() => {
-					// now we try to set every breakpoint requested
-					this.setBreakpointsInFile(scriptPath, argBps).then((bps) => {
-						response.body = {
-							breakpoints: bps
-						};
+				await this.removeBreakpointsInFile(scriptPath);
+				// now we try to set every breakpoint requested
+				response.body = {
+					breakpoints: await this.setBreakpointsInFile(scriptPath, argBps)
+				};
+			} else {
+				logger.log('Can not set breakpoints. Runtime is not active yet or file not yet loaded');
+				// save breakpoints inside the map
+				const bps: Breakpoint[] = [];
+				const mapBps: IBreakpointData[] = [];
+				argBps.forEach(bp => {
+					mapBps.push({
+						id: this.currentBreakpointID,
+						line: bp.line,
+						condition: bp.condition || ''
 					});
+
+					bps.push(new Breakpoint(true, bp.line, undefined, new Source(scriptPath, scriptPath)));
+
+					this.currentBreakpointID++;
 				});
-			});
-		} else {
-			logger.log('Can not set breakpoints. Runtime is not active yet or file not yet loaded');
-			// save breakpoints inside the map
-			const bps: Breakpoint[] = [];
-			const mapBps: IBreakpointData[] = [];
-			argBps.forEach(bp => {
-				mapBps.push({
-					id: this.currentBreakpointID,
-					line: bp.line,
-					condition: bp.condition || ''
-				});
-
-				bps.push(new Breakpoint(true, bp.line, undefined, new Source(scriptPath, scriptPath)));
-
-				this.currentBreakpointID++;
-			});
-			this.postponedBreakpoints.set(this.normalizePathAndCasing(scriptPath), mapBps);
-			response.body = {
-				breakpoints: bps
-			};
-		}
-
+				this.postponedBreakpoints.set(this.normalizePathAndCasing(scriptPath), mapBps);
+				response.body = {
+					breakpoints: bps
+				};
+			}
+		})().catch((err) => {
+			response.success = false;
+			logger.error(err);
+		});
 		this.sendResponse(response);
 	}
 
