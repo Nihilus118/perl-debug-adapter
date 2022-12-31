@@ -841,9 +841,10 @@ export class PerlDebugSession extends LoggingDebugSession {
 
 	private async execute(cmd: string): Promise<void> {
 		const lines = await this.request(cmd);
-		const scriptOutput = lines.slice(1, lines.findIndex(e => { return e.match(/main::.*|Debugged program terminated|loaded source/); }));
+		const index = lines.findIndex(e => { return e.match(/^main::.*|^Debugged program terminated.*|^(continue\s)?loaded source.*/); });
+		const scriptOutput = lines.slice(1, index);
 		if (scriptOutput.filter(e => { return e !== ''; }).length > 0) {
-			this.sendEvent(new OutputEvent(scriptOutput.join('\n'), 'stderr'));
+			this.sendEvent(new OutputEvent(scriptOutput.join('\n') + '\n', 'stderr'));
 		}
 		// check if we reached the end
 		if (lines.join().includes('Debugged program terminated.')) {
