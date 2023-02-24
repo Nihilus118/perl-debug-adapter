@@ -143,7 +143,7 @@ export class PerlDebugSession extends LoggingDebugSession {
 	}
 
 	/**
-	 * Unsets all breakpoints in a given perl file.
+	 * Removes all breakpoints in a given perl file.
 	 */
 	private async removeBreakpointsInFile(filePath: string) {
 		const scriptPath = this.normalizePathAndCasing(filePath);
@@ -180,8 +180,8 @@ export class PerlDebugSession extends LoggingDebugSession {
 			let parentVars: Variable[] = [lastParent!];
 			let parent: Variable | undefined;
 			while ((parent = this.parentVarsMap.get(id)) && lastParent) {
-				const childsOfParent = this.childVarsMap.get(id);
-				if (parent && childsOfParent!.includes(lastParent)) {
+				const childrenOfParent = this.childVarsMap.get(id);
+				if (parent && childrenOfParent!.includes(lastParent)) {
 					parentVars.push(parent);
 					// we need to store the last parent variable to find the parent of the lastParent
 					lastParent = parent;
@@ -194,7 +194,7 @@ export class PerlDebugSession extends LoggingDebugSession {
 				const parentVar = parentVars[i];
 				if (i === parentVars.length - 1) {
 					if (parentVar.name.startsWith('$')) {
-						// if a nested variable starts with a dollar sign it has to be an object so the arrow is neccesarry
+						// if a nested variable starts with a dollar sign it has to be an object so the arrow is necessary
 						expression = `${parentVar.name}->`;
 					} else if (parentVar.name.match(/^[%|@]/)) {
 						// accessing hash and array values requires a dollar sign at the start
@@ -236,6 +236,8 @@ export class PerlDebugSession extends LoggingDebugSession {
 		response.body.supportsLoadedSourcesRequest = true;
 		response.body.supportsFunctionBreakpoints = true;
 		response.body.supportsConditionalBreakpoints = true;
+		response.body.supportsTerminateRequest = true;
+		response.body.supportsDelayedStackTraceLoading = false;
 
 		this.sendResponse(response);
 
@@ -313,7 +315,7 @@ export class PerlDebugSession extends LoggingDebugSession {
 		);
 
 		this._session.on('error', err => {
-			const text = `Couldn not spawn the child process! Command: ${args.perlExecutable}\nCode: ${err.name}\nError: ${err.message}`;
+			const text = `Could not spawn the child process! Command: ${args.perlExecutable}\nCode: ${err.name}\nError: ${err.message}`;
 			logger.error(text);
 			this.sendEvent(new OutputEvent(text, 'important'));
 			this.sendEvent(new TerminatedEvent());
@@ -452,7 +454,6 @@ export class PerlDebugSession extends LoggingDebugSession {
 				condition: bp.condition || ''
 			});
 
-			// this is only possible if the runtime is currently active
 			if (this.isActive()) {
 				await this.request(`b ${bp.name} ${bp.condition}`);
 			} else {
@@ -642,7 +643,7 @@ export class PerlDebugSession extends LoggingDebugSession {
 			let varDump = (await this.request(`print STDERR Data::Dumper->new([${varName}], [])->Deepcopy(1)->Sortkeys(1)->Indent(1)->Terse(0)->Trailingcomma(1)->Useqq(1)->Dump()`)).filter(e => { return e !== ''; }).slice(1, -1);
 			try {
 				while (true) {
-					// Continue everytime we reach a breakpoint during this call until we have proper output
+					// Continue every time we reach a breakpoint during this call until we have proper output
 					if (varDump[0].match(/^\$VAR1\s=\s.*/)) {
 						break;
 					} else {
@@ -885,7 +886,7 @@ export class PerlDebugSession extends LoggingDebugSession {
 			}
 			if (newSource.startsWith('continue') && (cmd === 'n' || cmd === 'c')) {
 				// just continue if the current command is continue or step over and the debugger allows it
-				this.continue();
+				await this.continue();
 				return;
 			} else {
 				// else we stop on reaching a new source
@@ -901,60 +902,44 @@ export class PerlDebugSession extends LoggingDebugSession {
 		this.sendEvent(new StoppedEvent(reason, PerlDebugSession.threadId));
 	}
 
-	private continue(): boolean {
-		let success = true;
-		this.execute('c').catch((err) => {
-			success = false;
-			logger.error(`continue: ${err}`);
-		});
-		return success;
+	private async continue(): Promise<void> {
+		await this.execute('c');
 	}
 
-	private step(): boolean {
-		let success = true;
-		this.execute('n').catch((err) => {
-			success = false;
-			logger.error(`step: ${err}`);
-		});
-		return success;
+	private async next(): Promise<void> {
+		await this.execute('n');
 	}
 
-	private stepIn(): boolean {
-		let success = true;
-		this.execute('s').catch((err) => {
-			success = false;
-			logger.error(`stepIn: ${err}`);
-		});
-		return success;
+	private async stepIn(): Promise<void> {
+		await this.execute('s');
 	}
 
-	private stepOut(): boolean {
-		let success = true;
-		this.execute('r').catch((err) => {
-			success = false;
-			logger.error(`stepOut: ${err}`);
-		});
-		return success;
+	private async stepOut(): Promise<void> {
+		await this.execute('r');
 	}
 
 	protected continueRequest(response: DebugProtocol.ContinueResponse, _args: DebugProtocol.ContinueArguments): void {
-		response.success = this.continue();
-		this.sendResponse(response);
+		this.continue().then(() => {
+			this.sendResponse(response);
+		});
 	}
 
 	protected nextRequest(response: DebugProtocol.NextResponse, _args: DebugProtocol.NextArguments): void {
-		response.success = this.step();
-		this.sendResponse(response);
+		this.next().then(() => {
+			this.sendResponse(response);
+		});
 	}
 
 	protected stepInRequest(response: DebugProtocol.StepInResponse, _args: DebugProtocol.StepInArguments): void {
-		response.success = this.stepIn();
-		this.sendResponse(response);
+		this.stepIn().then(() => {
+			this.sendResponse(response);
+		});
 	}
 
 	protected stepOutRequest(response: DebugProtocol.StepOutResponse, _args: DebugProtocol.StepOutArguments, _request?: DebugProtocol.Request): void {
-		response.success = this.stepOut();
-		this.sendResponse(response);
+		this.stepOut().then(() => {
+			this.sendResponse(response);
+		});
 	}
 
 	protected restartRequest(response: DebugProtocol.RestartResponse, _args: DebugProtocol.RestartArguments, _request?: DebugProtocol.Request): void {
