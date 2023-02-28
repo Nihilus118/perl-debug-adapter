@@ -1,9 +1,9 @@
 {
-  "name": "perl-debug",
-  "displayName": "Perl Debug Adapter",
-  "version": "0.0.5",
+  "name": "perl-debugger",
+  "displayName": "Perl Debugger",
+  "version": "1.0.0",
   "publisher": "nihilus118",
-  "description": "Implementation of a Debug Adapter for Perl.",
+  "description": "Debug Adapter for the Perl CLI-Debugger.",
   "author": {
     "name": "Johannes Ritter"
   },
@@ -18,7 +18,9 @@
   },
   "icon": "images/mock-debug-icon.png",
   "categories": [
-    "Debuggers"
+    "Debuggers",
+    "Programming Languages",
+    "Testing"
   ],
   "private": true,
   "repository": {
@@ -55,9 +57,7 @@
   "main": "./dist/extension.js",
   "activationEvents": [
     "onDebugResolve:perl",
-    "onDebugDynamicConfigurations:perl",
-    "onCommand:extension.perl-debug.debugEditorContents",
-    "onCommand:extension.perl-debug.runEditorContents"
+    "onDebugDynamicConfigurations:perl"
   ],
   "workspaceTrust": {
     "request": "never"
@@ -197,17 +197,6 @@
           }
         ]
       }
-    ],
-    "configuration": {
-      "title": "Perl Debug",
-      "properties": {
-        "perl.debug.showInlineValues": {
-          "type": "boolean",
-          "default": true,
-          "description": "If enabled inline variable values will be rendered to the viewport while debugging.",
-          "scope": "machine-overridable"
-        }
-      }
-    }
+    ]
   }
 }
