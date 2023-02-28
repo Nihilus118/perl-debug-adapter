@@ -1,0 +1,1 @@
+{"variables":[{"name":"Bar Foo","value":"HASH","variablesReference":997,"presentationHint":{"kind":"innerClass"},"type":"HASH","namedVariables":3,"evaluateName":"{%grades}{'Bar Foo'}"},{"name":"Foo Bar","value":"HASH","variablesReference":995,"presentationHint":{"kind":"innerClass"},"type":"HASH","namedVariables":1,"evaluateName":"{%grades}{'Foo Bar'}"}]}
