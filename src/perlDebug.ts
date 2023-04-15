@@ -916,28 +916,22 @@ export class PerlDebugSession extends LoggingDebugSession {
 	}
 
 	protected async continueRequest(response: DebugProtocol.ContinueResponse, _args: DebugProtocol.ContinueArguments): Promise<void> {
-		await this.continue();
+		this.continue();
 		this.sendResponse(response);
 	}
 
 	protected async nextRequest(response: DebugProtocol.NextResponse, _args: DebugProtocol.NextArguments): Promise<void> {
-		await this.next();
+		this.next();
 		this.sendResponse(response);
 	}
 
 	protected async stepInRequest(response: DebugProtocol.StepInResponse, _args: DebugProtocol.StepInArguments): Promise<void> {
-		await this.stepIn();
+		this.stepIn();
 		this.sendResponse(response);
 	}
 
 	protected async stepOutRequest(response: DebugProtocol.StepOutResponse, _args: DebugProtocol.StepOutArguments, _request?: DebugProtocol.Request): Promise<void> {
-		await this.stepOut();
-		this.sendResponse(response);
-	}
-
-	protected async restartRequest(response: DebugProtocol.RestartResponse, _args: DebugProtocol.RestartArguments, _request?: DebugProtocol.Request): Promise<void> {
-		await this.streamCatcher.destroy();
-		this._session.kill();
+		this.stepOut();
 		this.sendResponse(response);
 	}
 
