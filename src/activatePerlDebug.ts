@@ -86,21 +86,18 @@ export function activatePerlDebug(context: vscode.ExtensionContext, factory: vsc
 
 			const allValues: vscode.InlineValue[] = [];
 
-			const enabled = vscode.workspace.getConfiguration('perl.debug').get<boolean>('showInlineValues');
-			if (enabled) {
-				for (let l = viewport.start.line; l <= context.stoppedLocation.end.line; l++) {
-					const line = document.lineAt(l);
-					do {
-						var m = VARIABLE_REGEXP.exec(line.text);
-						if (m) {
-							const varName = m[0];
-							const varRange = new vscode.Range(l, m.index, l, m.index + varName.length);
+			for (let l = viewport.start.line; l <= context.stoppedLocation.end.line; l++) {
+				const line = document.lineAt(l);
+				do {
+					var m = VARIABLE_REGEXP.exec(line.text);
+					if (m) {
+						const varName = m[0];
+						const varRange = new vscode.Range(l, m.index, l, m.index + varName.length);
 
-							// value determined via expression evaluation
-							allValues.push(new vscode.InlineValueEvaluatableExpression(varRange, varName));
-						}
-					} while (m);
-				}
+						// value determined via expression evaluation
+						allValues.push(new vscode.InlineValueEvaluatableExpression(varRange, varName));
+					}
+				} while (m);
 			}
 			return allValues;
 		}
