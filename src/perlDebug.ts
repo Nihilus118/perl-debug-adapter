@@ -323,18 +323,19 @@ export class PerlDebugSession extends LoggingDebugSession {
 		});
 
 		this._session.on('close', code => {
-			const text = `Debugger closed unexpectedly! Code: ${code}\n${this.streamCatcher.getBuffer().join('\n')}`;
-			logger.error(text);
-			this.sendEvent(new OutputEvent(text, 'important'));
-			this.sendEvent(new OutputEvent(text, 'stderr'));
-			this.sendEvent(new TerminatedEvent());
+			if (code === 255) {
+				this.sendEvent(new OutputEvent(`${this.streamCatcher.getBuffer().splice(0, 7).join('\n')}\n`, 'stderr'));
+				this.sendEvent(new TerminatedEvent());
+			}
 			return;
 		});
 
 		this._session.on('exit', code => {
-			const text = `Could not start the debugging session! Script may contains errors. Code: ${code}\nError: ${this.streamCatcher.getBuffer().join('\n')}`;
-			this.sendEvent(new OutputEvent(text, 'stderr'));
-			this.sendEvent(new TerminatedEvent());
+			if (code === 255) {
+				const text = `Could not start the debugging session! Script may contains errors. Code: ${code}\n${this.streamCatcher.getBuffer().splice(0, 7).join('\n')}\n`;
+				this.sendEvent(new OutputEvent(text, 'stderr'));
+				this.sendEvent(new TerminatedEvent());
+			}
 			return;
 		});
 
