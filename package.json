@@ -43,6 +43,7 @@
   "devDependencies": {
     "@types/jest": "^29.2.2",
     "@types/node": "^18.11.8",
+    "@types/unescape-js": "^1.0.0",
     "@types/vscode": "^1.64.0",
     "@typescript-eslint/eslint-plugin": "^5.12.0",
     "@typescript-eslint/parser": "^5.12.0",
@@ -170,6 +171,11 @@
                 "type": "boolean",
                 "description": "Enable threaded debugging (perl -dt).",
                 "default": false
+              },
+              "escapeSpecialChars": {
+                "type": "boolean",
+                "description": "If enabled special characters such as newlines and tabs will be escaped.",
+                "default": false
               }
             }
           }
@@ -198,5 +204,8 @@
         ]
       }
     ]
+  },
+  "dependencies": {
+    "unescape-js": "^1.1.4"
   }
 }

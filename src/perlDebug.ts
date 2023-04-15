@@ -5,6 +5,7 @@ import { DebugProtocol } from '@vscode/debugprotocol';
 import { ChildProcess, spawn, SpawnOptions } from 'child_process';
 import { basename, dirname, join } from 'path';
 import { ansiSeq, StreamCatcher } from './streamCatcher';
+import unescapeJs from 'unescape-js';
 
 interface ILaunchRequestArguments extends DebugProtocol.LaunchRequestArguments {
 	program: string;
@@ -16,6 +17,7 @@ interface ILaunchRequestArguments extends DebugProtocol.LaunchRequestArguments {
 	env?: { [key: string]: string; };
 	threaded?: boolean;
 	trace?: boolean;
+	escapeSpecialChars?: boolean;
 }
 
 interface IFunctionBreakpointData {
@@ -41,6 +43,7 @@ export class PerlDebugSession extends LoggingDebugSession {
 	private postponedBreakpoints = new Map<string, IBreakpointData[]>();
 	private funcBps: IFunctionBreakpointData[] = [];
 	private cwd: string = '';
+	private escapeSpecialChars: boolean = false;
 
 	// the perl cli session
 	private _session!: ChildProcess;
@@ -265,6 +268,8 @@ export class PerlDebugSession extends LoggingDebugSession {
 		// set cwd
 		args.cwd = this.normalizePathAndCasing(args.cwd || dirname(args.program));
 		this.cwd = args.cwd;
+
+		this.escapeSpecialChars = args.escapeSpecialChars || false;
 
 		// setup logger
 		if (args.trace === true) {
@@ -666,6 +671,9 @@ export class PerlDebugSession extends LoggingDebugSession {
 					varDump[0] = varDump[0].replace(/=/, '=>');
 					const matched = varDump[0].match(this.isNamedVariable);
 					if (matched && varDump.length === 1) {
+						if (!this.escapeSpecialChars) {
+							matched[2] = unescapeJs(matched[2]);
+						}
 						vs.push({
 							name: varNames[i],
 							value: `${matched[2]}`,
