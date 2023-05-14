@@ -114,9 +114,4 @@ export class StreamCatcher extends EventEmitter {
             this.nextRequest();
         });
     }
-
-    destroy() {
-        this.removeAllListeners();
-        return Promise.resolve();
-    }
 }
