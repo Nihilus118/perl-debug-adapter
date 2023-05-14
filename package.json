@@ -16,7 +16,7 @@
   "engines": {
     "vscode": "^1.64.0"
   },
-  "icon": "images/mock-debug-icon.png",
+  "icon": "images/logo.png",
   "categories": [
     "Debuggers",
     "Programming Languages",
