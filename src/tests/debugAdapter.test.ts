@@ -118,9 +118,6 @@ describe('Perl Debug Adapter', () => {
 			await dc.terminateRequest();
 			await dc.stop();
 			// now try to launch the script including the syntax error
-			dc.addListener('terminated', () => {
-				// expect the launch request to send a terminated event
-			})
 			await dc.start();
 			dc.launch({
 				type: 'perl',
