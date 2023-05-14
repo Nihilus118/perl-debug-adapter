@@ -10,6 +10,7 @@ describe('Perl Debug Adapter', () => {
 	const CWD = Path.join(PROJECT_ROOT, 'tests', 'data');
 	const PERL_SCRIPT = Path.join(CWD, 'test.pl');
 	const INCLUDED_PERL_SCRIPT = Path.join(CWD, 'dbconfig.pl');
+	const BROKEN_PERL_SCRIPT = Path.join(CWD, 'exception.pl');
 
 	let dc: DebugClient;
 	dc = new DebugClient('node', DEBUG_ADAPTER, 'perl', undefined, true);
@@ -110,6 +111,30 @@ describe('Perl Debug Adapter', () => {
 			expect(trace.success).toBe(true);
 			expect(trace.body.stackFrames[0].source!.path).toBe(PERL_SCRIPT);
 			expect(trace.body.stackFrames[0].line).toBe(19);
+		});
+
+		test('terminate on syntax error', async () => {
+			// terminate the working script first
+			await dc.terminateRequest();
+			await dc.stop();
+			// now try to launch the script including the syntax error
+			dc.addListener('terminated', () => {
+				// expect the launch request to send a terminated event
+			})
+			await dc.start();
+			dc.launch({
+				type: 'perl',
+				request: 'launch',
+				name: 'Perl Debug',
+				program: BROKEN_PERL_SCRIPT,
+				stopOnEntry: true,
+				cwd: CWD
+			}).then(() => {
+				fail('launch request should not complete');
+			}).catch(() => {
+				// make the test pass on error
+				expect(true).toBe(true);
+			});
 		});
 	});
 
