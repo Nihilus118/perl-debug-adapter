@@ -1,5 +1,5 @@
 import {
-	Breakpoint, Handles, InitializedEvent, logger, Logger, LoggingDebugSession, OutputEvent, Scope, Source, StackFrame, StoppedEvent, TerminatedEvent, Thread, Variable
+	Breakpoint, ContinuedEvent, Handles, InitializedEvent, logger, Logger, LoggingDebugSession, OutputEvent, Scope, Source, StackFrame, StoppedEvent, TerminatedEvent, Thread, Variable
 } from '@vscode/debugadapter';
 import { DebugProtocol } from '@vscode/debugprotocol';
 import { ChildProcess, spawn, SpawnOptions } from 'child_process';
@@ -924,28 +924,32 @@ export class PerlDebugSession extends LoggingDebugSession {
 	}
 
 	protected async continueRequest(response: DebugProtocol.ContinueResponse, _args: DebugProtocol.ContinueArguments): Promise<void> {
-		this.continue();
+		this.sendEvent(new ContinuedEvent(PerlDebugSession.threadId));
+		await this.continue();
 		this.sendResponse(response);
 	}
 
 	protected async nextRequest(response: DebugProtocol.NextResponse, _args: DebugProtocol.NextArguments): Promise<void> {
-		this.next();
+		this.sendEvent(new ContinuedEvent(PerlDebugSession.threadId));
+		await this.next();
 		this.sendResponse(response);
 	}
 
 	protected async stepInRequest(response: DebugProtocol.StepInResponse, _args: DebugProtocol.StepInArguments): Promise<void> {
-		this.stepIn();
+		this.sendEvent(new ContinuedEvent(PerlDebugSession.threadId));
+		await this.stepIn();
 		this.sendResponse(response);
 	}
 
 	protected async stepOutRequest(response: DebugProtocol.StepOutResponse, _args: DebugProtocol.StepOutArguments, _request?: DebugProtocol.Request): Promise<void> {
-		this.stepOut();
+		this.sendEvent(new ContinuedEvent(PerlDebugSession.threadId));
+		await this.stepOut();
 		this.sendResponse(response);
 	}
 
 	protected async terminateRequest(response: DebugProtocol.TerminateResponse, _args: DebugProtocol.TerminateArguments, _request?: DebugProtocol.Request): Promise<void> {
-		await this.streamCatcher.destroy();
 		this._session.kill();
+		this.sendEvent(new TerminatedEvent(false));
 		this.sendResponse(response);
 	}
 }
