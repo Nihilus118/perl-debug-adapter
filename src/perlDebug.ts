@@ -948,7 +948,9 @@ export class PerlDebugSession extends LoggingDebugSession {
 	}
 
 	protected async terminateRequest(response: DebugProtocol.TerminateResponse, _args: DebugProtocol.TerminateArguments, _request?: DebugProtocol.Request): Promise<void> {
-		this._session.kill();
+		if (this._session) {
+			this._session.kill();
+		}
 		this.sendEvent(new TerminatedEvent(false));
 		this.sendResponse(response);
 	}
