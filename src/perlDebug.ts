@@ -923,31 +923,47 @@ export class PerlDebugSession extends LoggingDebugSession {
 		await this.execute('r');
 	}
 
-	protected async continueRequest(response: DebugProtocol.ContinueResponse, _args: DebugProtocol.ContinueArguments): Promise<void> {
+	protected continueRequest(response: DebugProtocol.ContinueResponse, _args: DebugProtocol.ContinueArguments): void {
 		this.sendEvent(new ContinuedEvent(PerlDebugSession.threadId));
-		await this.continue();
-		this.sendResponse(response);
+		this.continue().then(() => {
+			this.sendResponse(response);
+		}).catch(() => {
+			response.success = false;
+			this.sendResponse(response);
+		});
 	}
 
-	protected async nextRequest(response: DebugProtocol.NextResponse, _args: DebugProtocol.NextArguments): Promise<void> {
+	protected nextRequest(response: DebugProtocol.NextResponse, _args: DebugProtocol.NextArguments): void {
 		this.sendEvent(new ContinuedEvent(PerlDebugSession.threadId));
-		await this.next();
-		this.sendResponse(response);
+		this.next().then(() => {
+			this.sendResponse(response);
+		}).catch(() => {
+			response.success = false;
+			this.sendResponse(response);
+		});
 	}
 
-	protected async stepInRequest(response: DebugProtocol.StepInResponse, _args: DebugProtocol.StepInArguments): Promise<void> {
+	protected stepInRequest(response: DebugProtocol.StepInResponse, _args: DebugProtocol.StepInArguments): void {
 		this.sendEvent(new ContinuedEvent(PerlDebugSession.threadId));
-		await this.stepIn();
-		this.sendResponse(response);
+		this.stepIn().then(() => {
+			this.sendResponse(response);
+		}).catch(() => {
+			response.success = false;
+			this.sendResponse(response);
+		});
 	}
 
-	protected async stepOutRequest(response: DebugProtocol.StepOutResponse, _args: DebugProtocol.StepOutArguments, _request?: DebugProtocol.Request): Promise<void> {
+	protected stepOutRequest(response: DebugProtocol.StepOutResponse, _args: DebugProtocol.StepOutArguments, _request?: DebugProtocol.Request): void {
 		this.sendEvent(new ContinuedEvent(PerlDebugSession.threadId));
-		await this.stepOut();
-		this.sendResponse(response);
+		this.stepOut().then(() => {
+			this.sendResponse(response);
+		}).catch(() => {
+			response.success = false;
+			this.sendResponse(response);
+		});
 	}
 
-	protected async terminateRequest(response: DebugProtocol.TerminateResponse, _args: DebugProtocol.TerminateArguments, _request?: DebugProtocol.Request): Promise<void> {
+	protected terminateRequest(response: DebugProtocol.TerminateResponse, _args: DebugProtocol.TerminateArguments, _request?: DebugProtocol.Request): void {
 		if (this._session) {
 			this._session.kill();
 		}

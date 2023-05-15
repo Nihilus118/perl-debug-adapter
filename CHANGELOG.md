@@ -10,3 +10,5 @@
 * Show inline values while debugging
 * Commands and buttons to run and debug a perl script
 * Add or overwrite environment variables via launch.json
+## 1.0.1
+* Fix running state UI on Linux
