@@ -12,3 +12,5 @@
 * Add or overwrite environment variables via launch.json
 ## 1.0.1
 * Fix running state UI on Linux
+## 1.0.2
+* Fix stacktrace for imported modules and eval statements
