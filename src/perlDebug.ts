@@ -398,11 +398,12 @@ export class PerlDebugSession extends LoggingDebugSession {
 			if (args.stopOnEntry) {
 				this.sendEvent(new StoppedEvent('entry', PerlDebugSession.threadId));
 			} else {
+				this.sendEvent(new ContinuedEvent(PerlDebugSession.threadId));
 				await this.continue();
 			}
 		} else {
 			// Just run
-			logger.log('Running script');
+			this.sendEvent(new ContinuedEvent(PerlDebugSession.threadId));
 			await this.continue();
 		}
 
