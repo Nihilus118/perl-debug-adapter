@@ -6,6 +6,7 @@ import { ChildProcess, spawn, SpawnOptions } from 'child_process';
 import { basename, dirname, join } from 'path';
 import { ansiSeq, StreamCatcher } from './streamCatcher';
 import unescapeJs from 'unescape-js';
+import * as path from 'path';
 
 interface ILaunchRequestArguments extends DebugProtocol.LaunchRequestArguments {
 	program: string;
@@ -485,18 +486,28 @@ export class PerlDebugSession extends LoggingDebugSession {
 	private async getStackFrames(): Promise<StackFrame[]> {
 		let stackFrames: StackFrame[] = [];
 		const stackTrace = /^[@|.]\s=\s(.*)\scalled\sfrom\sfile\s'(.*)'\sline\s(\d+)/;
+		const evalTrace = /^\((eval\s\d+)\)\[(.*):(\d+)\]$/;
 
 		const lines = (await this.request('T')).slice(1, -1);
 		for (let i = 0; i < lines.length; i++) {
 			const line = lines[i];
 			const matched = line.match(stackTrace);
 			if (matched) {
-				let file = this.normalizePathAndCasing(matched[2]);
-				if (file.startsWith('.')) {
+				let name = matched[1];
+				let file = matched[2];
+				let line = +matched[3];
+				const isEval = file.match(evalTrace);
+				if (isEval) {
+					name += ' (' + isEval[1] + ')';
+					file = isEval[2];
+					line = +isEval[3];
+				}
+				file = this.normalizePathAndCasing(file);
+				if (file.startsWith('.') || !path.isAbsolute(file)) {
 					file = join(this.cwd, file);
 				}
 				const fn = new Source(basename(file), file);
-				stackFrames.push(new StackFrame(i, matched[1], fn, +matched[3]));
+				stackFrames.push(new StackFrame(i, name, fn, line));
 			}
 		}
 
