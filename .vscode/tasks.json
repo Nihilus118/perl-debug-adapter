@@ -9,14 +9,14 @@
                 "isDefault": true,
                 "kind": "build"
             },
-            "problemMatcher": "$esbuild",
+            "problemMatcher": "$tsc",
             "label": "npm: build"
         },
         {
             "type": "npm",
             "script": "watch",
             "group": "build",
-            "problemMatcher": "$esbuild-watch",
+            "problemMatcher": "$tsc",
             "isBackground": true,
             "label": "npm: watch"
         },
@@ -24,7 +24,7 @@
             "type": "npm",
             "script": "watch-web",
             "group": "build",
-            "problemMatcher": "$esbuild-watch",
+            "problemMatcher": "$tsc",
             "isBackground": true,
             "label": "npm: watch web"
         }
