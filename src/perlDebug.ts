@@ -911,6 +911,10 @@ export class PerlDebugSession extends LoggingDebugSession {
 		await this.execute('c');
 	}
 
+	private pause(): void {
+		this._session.kill('SIGINT');
+	}
+
 	private async next(): Promise<void> {
 		await this.execute('n');
 	}
@@ -931,6 +935,12 @@ export class PerlDebugSession extends LoggingDebugSession {
 			response.success = false;
 			this.sendResponse(response);
 		});
+	}
+
+	protected pauseRequest(response: DebugProtocol.PauseResponse, _args: DebugProtocol.PauseArguments): void {
+		this.sendResponse(response);
+		this.sendEvent(new StoppedEvent('pause', PerlDebugSession.threadId));
+		this.pause();
 	}
 
 	protected nextRequest(response: DebugProtocol.NextResponse, _args: DebugProtocol.NextArguments): void {
