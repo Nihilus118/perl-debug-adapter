@@ -19,6 +19,7 @@ interface ILaunchRequestArguments extends DebugProtocol.LaunchRequestArguments {
 	threaded?: boolean;
 	trace?: boolean;
 	escapeSpecialChars?: boolean;
+	perl5db?: string;
 }
 
 interface IFunctionBreakpointData {
@@ -285,6 +286,8 @@ export class PerlDebugSession extends LoggingDebugSession {
 		let env: NodeJS.ProcessEnv = {
 			...process.env,
 			...args.env,
+			// eslint-disable-next-line @typescript-eslint/naming-convention
+			PERL5DB: args.perl5db,
 			// eslint-disable-next-line @typescript-eslint/naming-convention
 			COLUMNS: '80',
 			// eslint-disable-next-line @typescript-eslint/naming-convention

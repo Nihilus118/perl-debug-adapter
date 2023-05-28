@@ -179,6 +179,11 @@
                 "type": "boolean",
                 "description": "If enabled special characters such as newlines and tabs will be escaped.",
                 "default": false
+              },
+              "perl5db": {
+                "type": "string",
+                "description": "Sets the PERL5DB environment variable",
+                "default": ""
               }
             }
           }
