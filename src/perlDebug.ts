@@ -365,6 +365,9 @@ export class PerlDebugSession extends LoggingDebugSession {
 			// do not print any preview to the debug console
 			await this.request('package DB; $DB::preview = 0;');
 
+			// diesable tracing
+			await this.request('notrace');
+
 			// do not print return values on return-command
 			await this.request('o PrintRet=0');
 
@@ -926,6 +929,10 @@ export class PerlDebugSession extends LoggingDebugSession {
 		await this.execute('c');
 	}
 
+	private pause(): boolean {
+		return this._session.kill('SIGINT');
+	}
+
 	private async next(): Promise<void> {
 		await this.execute('n');
 	}
@@ -946,6 +953,13 @@ export class PerlDebugSession extends LoggingDebugSession {
 			response.success = false;
 			this.sendResponse(response);
 		});
+	}
+
+	protected pauseRequest(response: DebugProtocol.PauseResponse, _args: DebugProtocol.PauseArguments): void {
+		if (!this.pause()) {
+			response.success = false;
+		}
+		this.sendResponse(response);
 	}
 
 	protected nextRequest(response: DebugProtocol.NextResponse, _args: DebugProtocol.NextArguments): void {
