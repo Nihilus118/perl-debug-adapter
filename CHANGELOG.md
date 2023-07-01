@@ -14,3 +14,6 @@
 * Fix running state UI on Linux
 ## 1.0.2
 * Fix stacktrace for imported modules and eval statements
+## 1.0.3
+* Change PERL5DB-Options via launch.json
+* Pause request
