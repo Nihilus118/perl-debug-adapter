@@ -361,6 +361,9 @@ export class PerlDebugSession extends LoggingDebugSession {
 			// do not print any preview to the debug console
 			await this.request('package DB; $DB::preview = 0;');
 
+			// diesable tracing
+			await this.request('notrace');
+
 			// do not print return values on return-command
 			await this.request('o PrintRet=0');
 
