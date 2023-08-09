@@ -14,7 +14,7 @@ export function activatePerlDebug(context: vscode.ExtensionContext, factory: vsc
 				targetResource = vscode.window.activeTextEditor.document.uri;
 			}
 			if (targetResource) {
-				vscode.debug.startDebugging(undefined, {
+				return vscode.debug.startDebugging(undefined, {
 					type: 'perl',
 					name: 'Run File',
 					request: 'launch',
@@ -24,6 +24,7 @@ export function activatePerlDebug(context: vscode.ExtensionContext, factory: vsc
 					{ noDebug: true }
 				);
 			}
+			return;
 		}),
 		vscode.commands.registerCommand('extension.perl-debug.debugEditorContents', (resource: vscode.Uri) => {
 			let targetResource = resource;
@@ -31,7 +32,7 @@ export function activatePerlDebug(context: vscode.ExtensionContext, factory: vsc
 				targetResource = vscode.window.activeTextEditor.document.uri;
 			}
 			if (targetResource) {
-				vscode.debug.startDebugging(undefined, {
+				return vscode.debug.startDebugging(undefined, {
 					type: 'perl',
 					name: 'Run File',
 					request: 'launch',
@@ -40,6 +41,7 @@ export function activatePerlDebug(context: vscode.ExtensionContext, factory: vsc
 					debug: true
 				});
 			}
+			return;
 		})
 	);
 

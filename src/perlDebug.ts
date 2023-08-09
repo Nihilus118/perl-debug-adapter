@@ -1,5 +1,5 @@
 import {
-	Breakpoint, ContinuedEvent, Handles, InitializedEvent, logger, Logger, LoggingDebugSession, OutputEvent, Scope, Source, StackFrame, StoppedEvent, TerminatedEvent, Thread, Variable
+	Breakpoint, ContinuedEvent, Handles, InitializedEvent, logger, Logger, LoggingDebugSession, OutputEvent, Scope, Source, StackFrame, StoppedEvent, TerminatedEvent, Variable
 } from '@vscode/debugadapter';
 import { DebugProtocol } from '@vscode/debugprotocol';
 import { ChildProcess, spawn, SpawnOptions } from 'child_process';
@@ -59,6 +59,28 @@ export class PerlDebugSession extends LoggingDebugSession {
 
 		this.setDebuggerLinesStartAt1(false);
 		this.setDebuggerColumnsStartAt1(false);
+	}
+
+	/**
+	 * 
+	 * @param event 
+	 * 
+	 * This function logs an event before sending it to the debug client
+	 */
+	protected logSendEvent(event: DebugProtocol.Event): void {
+		this.sendEvent(event);
+		logger.log(`Event sent: ${JSON.stringify(event)}`);
+	}
+
+	/**
+	 * 
+	 * @param response 
+	 * 
+	 * This function logs a response before sending it to the debug client
+	 */
+	protected logSendResponse(response: DebugProtocol.Response): void {
+		super.sendResponse(response);
+		logger.log(`Response sent: ${JSON.stringify(response)}`);
 	}
 
 	/**
@@ -244,12 +266,12 @@ export class PerlDebugSession extends LoggingDebugSession {
 		response.body.supportsTerminateRequest = true;
 		response.body.supportsDelayedStackTraceLoading = false;
 
-		this.sendResponse(response);
+		this.logSendResponse(response);
 
 		// since this debug adapter can accept configuration requests like 'setBreakpoint' at any time,
 		// we request them early by sending an 'initializeRequest' to the frontend.
 		// The frontend will end the configuration sequence by calling 'configurationDone' request.
-		this.sendEvent(new InitializedEvent());
+		this.logSendEvent(new InitializedEvent());
 	}
 
 	/**
@@ -326,15 +348,15 @@ export class PerlDebugSession extends LoggingDebugSession {
 		this._session.on('error', err => {
 			const text = `Could not spawn the child process! Command: ${args.perlExecutable}\nCode: ${err.name}\nError: ${err.message}`;
 			logger.error(text);
-			this.sendEvent(new OutputEvent(text, 'important'));
-			this.sendEvent(new TerminatedEvent());
+			this.logSendEvent(new OutputEvent(text, 'important'));
+			this.logSendEvent(new TerminatedEvent());
 			return;
 		});
 
 		this._session.on('close', code => {
 			if (code === 255) {
-				this.sendEvent(new OutputEvent(`${this.streamCatcher.getBuffer().splice(0, 7).join('\n')}\n`, 'stderr'));
-				this.sendEvent(new TerminatedEvent());
+				this.logSendEvent(new OutputEvent(`${this.streamCatcher.getBuffer().splice(0, 7).join('\n')}\n`, 'stderr'));
+				this.logSendEvent(new TerminatedEvent());
 			}
 			return;
 		});
@@ -342,15 +364,15 @@ export class PerlDebugSession extends LoggingDebugSession {
 		this._session.on('exit', code => {
 			if (code === 255) {
 				const text = `Could not start the debugging session! Script may contains errors. Code: ${code}\n${this.streamCatcher.getBuffer().splice(0, 7).join('\n')}\n`;
-				this.sendEvent(new OutputEvent(text, 'stderr'));
-				this.sendEvent(new TerminatedEvent());
+				this.logSendEvent(new OutputEvent(text, 'stderr'));
+				this.logSendEvent(new TerminatedEvent());
 			}
 			return;
 		});
 
 		// send the script output to the debug console
 		this._session.stdout!.on('data', (data) => {
-			this.sendEvent(new OutputEvent(data.toString().replace(ansiSeq, ''), 'stdout'));
+			this.logSendEvent(new OutputEvent(data.toString().replace(ansiSeq, ''), 'stdout'));
 		});
 
 		await this.streamCatcher.launch(
@@ -377,8 +399,8 @@ export class PerlDebugSession extends LoggingDebugSession {
 			// use PadWalker to list variables in scope and Data::Dumper for accessing variable values
 			const lines = await this.request('use PadWalker qw/peek_our peek_my/; use Data::Dumper;');
 			if (lines.join().includes('Can\'t locate')) {
-				this.sendEvent(new OutputEvent(`Could not load required modules:\n${lines.join('\n')}`, 'important'));
-				this.sendEvent(new TerminatedEvent());
+				this.logSendEvent(new OutputEvent(`Could not load required modules:\n${lines.join('\n')}`, 'important'));
+				this.logSendEvent(new TerminatedEvent());
 				return;
 			}
 
@@ -396,25 +418,25 @@ export class PerlDebugSession extends LoggingDebugSession {
 				const bp = this.funcBps[i];
 				const data = (await this.request(`b ${bp.name} ${bp.condition}`))[1];
 				if (data.includes('not found')) {
-					this.sendEvent(new OutputEvent(`Could not set function breakpoint:\n${data}`, 'important'));
+					this.logSendEvent(new OutputEvent(`Could not set function breakpoint:\n${data}`, 'important'));
 				}
 			}
 
 			// stop on entry or continue?
 			logger.log(`StopOnEntry: ${args.stopOnEntry}`);
 			if (args.stopOnEntry) {
-				this.sendEvent(new StoppedEvent('entry', PerlDebugSession.threadId));
+				this.logSendEvent(new StoppedEvent('entry', PerlDebugSession.threadId));
 			} else {
-				this.sendEvent(new ContinuedEvent(PerlDebugSession.threadId));
+				this.logSendEvent(new ContinuedEvent(PerlDebugSession.threadId));
 				await this.continue();
 			}
 		} else {
 			// Just run
-			this.sendEvent(new ContinuedEvent(PerlDebugSession.threadId));
+			this.logSendEvent(new ContinuedEvent(PerlDebugSession.threadId));
 			await this.continue();
 		}
 
-		this.sendResponse(response);
+		this.logSendResponse(response);
 	}
 
 	protected async setBreakPointsRequest(response: DebugProtocol.SetBreakpointsResponse, args: DebugProtocol.SetBreakpointsArguments): Promise<void> {
@@ -453,7 +475,7 @@ export class PerlDebugSession extends LoggingDebugSession {
 			};
 		}
 
-		this.sendResponse(response);
+		this.logSendResponse(response);
 	}
 
 	protected async setFunctionBreakPointsRequest(response: DebugProtocol.SetFunctionBreakpointsResponse, args: DebugProtocol.SetFunctionBreakpointsArguments, request?: DebugProtocol.Request): Promise<void> {
@@ -471,22 +493,14 @@ export class PerlDebugSession extends LoggingDebugSession {
 			}
 		}
 
-		this.sendResponse(response);
+		this.logSendResponse(response);
 	}
 
 	protected async threadsRequest(response: DebugProtocol.ThreadsResponse): Promise<void> {
-		// Get only the current ThreadID as the builtin 'E'-Command can break the debugger process
-		let thread: Thread;
-		const matched = (await this.request('print STDERR threads->self()->tid()'))[1].trim().match(/^(\d+)$/);
-		if (matched) {
-			thread = new Thread(PerlDebugSession.threadId, `thread ${matched[1]}`);
-		} else {
-			thread = new Thread(PerlDebugSession.threadId, 'thread 0');
-		}
 		response.body = {
-			threads: [thread]
+			threads: [{ id: PerlDebugSession.threadId, name: 'thread 1' }]
 		};
-		this.sendResponse(response);
+		this.logSendResponse(response);
 	}
 
 	private async getStackFrames(): Promise<StackFrame[]> {
@@ -527,7 +541,7 @@ export class PerlDebugSession extends LoggingDebugSession {
 			stackFrames: stackFrames,
 			totalFrames: stackFrames.length
 		};
-		this.sendResponse(response);
+		this.logSendResponse(response);
 	}
 
 	protected scopesRequest(response: DebugProtocol.ScopesResponse, args: DebugProtocol.ScopesArguments): void {
@@ -542,7 +556,7 @@ export class PerlDebugSession extends LoggingDebugSession {
 		this.parentVarsMap.clear();
 		this.childVarsMap.clear();
 		this.currentVarRef = 999;
-		this.sendResponse(response);
+		this.logSendResponse(response);
 	}
 
 	protected async variablesRequest(response: DebugProtocol.VariablesResponse, args: DebugProtocol.VariablesArguments, _request?: DebugProtocol.Request): Promise<void> {
@@ -615,7 +629,7 @@ export class PerlDebugSession extends LoggingDebugSession {
 			variables: parsedVars
 		};
 
-		this.sendResponse(response);
+		this.logSendResponse(response);
 	}
 
 	protected async evaluateRequest(response: DebugProtocol.EvaluateResponse, args: DebugProtocol.EvaluateArguments, request?: DebugProtocol.Request): Promise<void> {
@@ -624,7 +638,7 @@ export class PerlDebugSession extends LoggingDebugSession {
 		// ensure that a variable is being evaluated
 		if (['$', '%', '@'].includes(varName.charAt(0)) === false) {
 			response.success = false;
-			this.sendResponse(response);
+			this.logSendResponse(response);
 			return;
 		}
 
@@ -647,7 +661,7 @@ export class PerlDebugSession extends LoggingDebugSession {
 			logger.error(`Could not evaluate ${varName}: ${error}`);
 			response.success = false;
 		}
-		this.sendResponse(response);
+		this.logSendResponse(response);
 	}
 
 	private async parseVars(varNames: string[]): Promise<Variable[]> {
@@ -666,13 +680,16 @@ export class PerlDebugSession extends LoggingDebugSession {
 					// Continue every time we reach a breakpoint during this call until we have proper output
 					if (varDump[0].match(/^\$VAR1\s=\s.*/)) {
 						break;
+					} else if (varDump[0].match(/^Can't call method ".*" on an undefined value at .* line \d+\.$/)) {
+						varDump = [];
+						break;
 					} else {
 						logger.log('Reached breakpoint while dumping variable');
 						// check if we reached the end
 						if (varDump.join().includes('Debugged program terminated.')) {
 							// ensure that every script output is send to the debug console before closing the session
 							await this.request('sleep(.5)');
-							this.sendEvent(new TerminatedEvent());
+							this.logSendEvent(new TerminatedEvent());
 							return [new Variable(varName, '')];
 						}
 						varDump = (await this.request('c')).filter(e => { return e !== ''; }).slice(1, -1);
@@ -741,6 +758,7 @@ export class PerlDebugSession extends LoggingDebugSession {
 				});
 			}
 		}
+
 
 		// return all vars
 		return vs;
@@ -838,13 +856,13 @@ export class PerlDebugSession extends LoggingDebugSession {
 		const expressionToChange = this.getExpression(args.variablesReference, args.name);
 		const lines = (await this.request(`${expressionToChange} = ${args.value}`)).filter(e => { return e !== ''; });
 		if (lines.slice(1, -1).length > 0) {
-			this.sendEvent(new OutputEvent(`Error setting value: ${lines.join(' ')}`, 'important'));
+			this.logSendEvent(new OutputEvent(`Error setting value: ${lines.join(' ')}`, 'important'));
 			response.success = false;
 		} else {
 			const value = (await this.request(`print STDERR Data::Dumper->new([${(expressionToChange.startsWith('@') ? `[${expressionToChange}]` : (expressionToChange.startsWith('%') ? `{${expressionToChange}}` : expressionToChange))}], [])->Useqq(1)->Terse(1)->Dump()`)).slice(1, -1).join(' ');
 			response.body = { value: `${value.trim()}` };
 		}
-		this.sendResponse(response);
+		this.logSendResponse(response);
 	}
 
 	protected async loadedSourcesRequest(response: DebugProtocol.LoadedSourcesResponse, args: DebugProtocol.LoadedSourcesArguments, request?: DebugProtocol.Request): Promise<void> {
@@ -863,7 +881,7 @@ export class PerlDebugSession extends LoggingDebugSession {
 			sources: sources
 		};
 
-		this.sendResponse(response);
+		this.logSendResponse(response);
 	}
 
 	private async execute(cmd: string): Promise<void> {
@@ -871,13 +889,13 @@ export class PerlDebugSession extends LoggingDebugSession {
 		const index = lines.findIndex(e => { return e.match(/^main::.*|^Debugged program terminated.*|^(continue\s)?loaded source.*/); });
 		const scriptOutput = lines.slice(1, index);
 		if (scriptOutput.filter(e => { return e !== ''; }).length > 0) {
-			this.sendEvent(new OutputEvent(scriptOutput.join('\n') + '\n', 'stderr'));
+			this.logSendEvent(new OutputEvent(scriptOutput.join('\n') + '\n', 'stderr'));
 		}
 		// check if we reached the end
 		if (lines.join().includes('Debugged program terminated.')) {
 			// ensure that every script output is send to the debug console before closing the session
 			await this.request('sleep(.5)');
-			this.sendEvent(new TerminatedEvent());
+			this.logSendEvent(new TerminatedEvent());
 			return;
 		}
 		// the reason why the debugger paused the execution
@@ -901,7 +919,7 @@ export class PerlDebugSession extends LoggingDebugSession {
 					for (let i = 0; i < bps.length; i++) {
 						const bp = bps[i];
 						if (bp.line === currentLine) {
-							this.sendEvent(new StoppedEvent('breakpoint', PerlDebugSession.threadId));
+							this.logSendEvent(new StoppedEvent('breakpoint', PerlDebugSession.threadId));
 							return;
 						}
 					}
@@ -922,7 +940,7 @@ export class PerlDebugSession extends LoggingDebugSession {
 				reason = 'step';
 			}
 		}
-		this.sendEvent(new StoppedEvent(reason, PerlDebugSession.threadId));
+		this.logSendEvent(new StoppedEvent(reason, PerlDebugSession.threadId));
 	}
 
 	private async continue(): Promise<void> {
@@ -946,12 +964,12 @@ export class PerlDebugSession extends LoggingDebugSession {
 	}
 
 	protected continueRequest(response: DebugProtocol.ContinueResponse, _args: DebugProtocol.ContinueArguments): void {
-		this.sendEvent(new ContinuedEvent(PerlDebugSession.threadId));
+		this.logSendEvent(new ContinuedEvent(PerlDebugSession.threadId));
 		this.continue().then(() => {
-			this.sendResponse(response);
+			this.logSendResponse(response);
 		}).catch(() => {
 			response.success = false;
-			this.sendResponse(response);
+			this.logSendResponse(response);
 		});
 	}
 
@@ -959,36 +977,36 @@ export class PerlDebugSession extends LoggingDebugSession {
 		if (!this.pause()) {
 			response.success = false;
 		}
-		this.sendResponse(response);
+		this.logSendResponse(response);
 	}
 
 	protected nextRequest(response: DebugProtocol.NextResponse, _args: DebugProtocol.NextArguments): void {
-		this.sendEvent(new ContinuedEvent(PerlDebugSession.threadId));
+		this.logSendEvent(new ContinuedEvent(PerlDebugSession.threadId));
 		this.next().then(() => {
-			this.sendResponse(response);
+			this.logSendResponse(response);
 		}).catch(() => {
 			response.success = false;
-			this.sendResponse(response);
+			this.logSendResponse(response);
 		});
 	}
 
 	protected stepInRequest(response: DebugProtocol.StepInResponse, _args: DebugProtocol.StepInArguments): void {
-		this.sendEvent(new ContinuedEvent(PerlDebugSession.threadId));
+		this.logSendEvent(new ContinuedEvent(PerlDebugSession.threadId));
 		this.stepIn().then(() => {
-			this.sendResponse(response);
+			this.logSendResponse(response);
 		}).catch(() => {
 			response.success = false;
-			this.sendResponse(response);
+			this.logSendResponse(response);
 		});
 	}
 
 	protected stepOutRequest(response: DebugProtocol.StepOutResponse, _args: DebugProtocol.StepOutArguments, _request?: DebugProtocol.Request): void {
-		this.sendEvent(new ContinuedEvent(PerlDebugSession.threadId));
+		this.logSendEvent(new ContinuedEvent(PerlDebugSession.threadId));
 		this.stepOut().then(() => {
-			this.sendResponse(response);
+			this.logSendResponse(response);
 		}).catch(() => {
 			response.success = false;
-			this.sendResponse(response);
+			this.logSendResponse(response);
 		});
 	}
 
@@ -996,7 +1014,7 @@ export class PerlDebugSession extends LoggingDebugSession {
 		if (this._session) {
 			this._session.kill();
 		}
-		this.sendEvent(new TerminatedEvent(false));
-		this.sendResponse(response);
+		this.logSendEvent(new TerminatedEvent(false));
+		this.logSendResponse(response);
 	}
 }
