@@ -30,6 +30,7 @@
   "bugs": {
     "url": "https://github.com/Nihilus118/vscode-perl-debug"
   },
+  "bin": "out/debugAdapter.js",
   "scripts": {
     "test": "jest",
     "compile": "tsc -p ./",
