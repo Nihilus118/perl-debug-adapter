@@ -41,6 +41,7 @@
     "publish": "vsce publish"
   },
   "dependencies": {
+    "@vscode/debugadapter": "^1.55.0-pre.1",
     "unescape-js": "^1.1.4"
   },
   "devDependencies": {
@@ -50,7 +51,6 @@
     "@types/vscode": "^1.64.0",
     "@typescript-eslint/eslint-plugin": "^5.12.0",
     "@typescript-eslint/parser": "^5.12.0",
-    "@vscode/debugadapter": "^1.55.0-pre.1",
     "@vscode/debugadapter-testsupport": "^1.55.0-pre.1",
     "esbuild": "^0.17.19",
     "eslint": "^8.9.0",
