@@ -1,7 +1,7 @@
 {
-  "name": "perl-debugger",
-  "displayName": "Perl Debugger",
-  "version": "1.0.4",
+  "name": "perl-debug-adapter",
+  "displayName": "Perl Debug Adapter",
+  "version": "1.0.5",
   "publisher": "nihilus118",
   "description": "Debug Adapter for the Perl CLI-Debugger.",
   "author": {
@@ -25,10 +25,10 @@
   "private": true,
   "repository": {
     "type": "git",
-    "url": "https://github.com/Nihilus118/vscode-perl-debug"
+    "url": "https://github.com/Nihilus118/perl-debug-adapter"
   },
   "bugs": {
-    "url": "https://github.com/Nihilus118/vscode-perl-debug"
+    "url": "https://github.com/Nihilus118/perl-debug-adapter"
   },
   "bin": "out/debugAdapter.js",
   "scripts": {
