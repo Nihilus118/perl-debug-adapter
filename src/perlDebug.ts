@@ -633,10 +633,15 @@ export class PerlDebugSession extends LoggingDebugSession {
 	}
 
 	protected async evaluateRequest(response: DebugProtocol.EvaluateResponse, args: DebugProtocol.EvaluateArguments, request?: DebugProtocol.Request): Promise<void> {
-		let varName = args.expression;
-
-		// ensure that a variable is being evaluated
-		if (['$', '%', '@'].includes(varName.charAt(0)) === false) {
+		let varName: string;
+		// check if a variable is being evaluated
+		if (['$', '%', '@'].includes(args.expression.charAt(0))) {
+			varName = args.expression;
+		} else if (args.context === 'repl' && this._session.stdin?.writable) {
+			// the user entered a command which is most likely meant to be sent to the stdin of the session
+			response.success = this._session.stdin.write(`${args.expression}\n`);
+			return;
+		} else {
 			response.success = false;
 			this.logSendResponse(response);
 			return;

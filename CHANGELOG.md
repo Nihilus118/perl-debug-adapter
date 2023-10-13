@@ -17,3 +17,9 @@
 ## 1.0.3
 * Change PERL5DB-Options via launch.json
 * Pause request
+## 1.0.4
+* Fixed issue #3
+## 1.0.5
+* Improvements for bundling the debug-adapter.
+## 1.0.6
+* Read from &lt;STDIN&gt;
