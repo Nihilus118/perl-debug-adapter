@@ -3,7 +3,7 @@
 import * as vscode from 'vscode';
 import { DebugConfiguration, ProviderResult, WorkspaceFolder } from 'vscode';
 
-const VARIABLE_REGEXP = /((\$|@|%)[a-z0-9_]+)((\->)?(\{"[a-z0-9_\s]+"\}|\{'[a-z0-9_\s]+'\}|\[\d+\]|\{\$[a-z0-9_]+\}|::[a-z0-9_]+))*/gi;
+const VARIABLE_REGEXP = /((\$|@|%)(?![0-9]+)(?![0-9]+[a-z]*$)[a-z0-9_]+)((\->)?(\{"[a-z0-9_\s]+"\}|\{'[a-z0-9_\s]+'\}|\[\d+\]|\{\$[a-z0-9_]+\}|::[a-z0-9_]+))*/gi;
 
 export function activatePerlDebug(context: vscode.ExtensionContext, factory: vscode.DebugAdapterDescriptorFactory) {
 

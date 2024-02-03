@@ -44,15 +44,15 @@ export class PerlDebugSession extends LoggingDebugSession {
 	private breakpointsMap = new Map<string, IBreakpointData[]>();
 	private postponedBreakpoints = new Map<string, IBreakpointData[]>();
 	private funcBps: IFunctionBreakpointData[] = [];
-	private cwd: string = '';
-	private escapeSpecialChars: boolean = false;
+	private cwd = '';
+	private escapeSpecialChars = false;
 
 	// the perl cli session
 	private _session!: ChildProcess;
 	// helper to run commands and parse output
 	private streamCatcher: StreamCatcher = new StreamCatcher;
 	// max tries to set a breakpoint
-	private maxBreakpointTries: number = 10;
+	private maxBreakpointTries = 10;
 
 	constructor() {
 		super('perl-debug.txt');
@@ -102,9 +102,8 @@ export class PerlDebugSession extends LoggingDebugSession {
 				path = `${matched[1].toUpperCase()}${matched[2]}`;
 			}
 			return path.replace(/\//g, '\\');
-		} else {
-			return path.replace(/\\/g, '/');
-		}
+		} 
+        return path.replace(/\\/g, '/');
 	}
 
 	/**
@@ -190,12 +189,7 @@ export class PerlDebugSession extends LoggingDebugSession {
 	 * Checks if the perl5db-runtime is currently active.
 	 */
 	private isActive(): boolean {
-		const type = typeof this.streamCatcher.input;
-		if (type !== 'undefined' && this.streamCatcher.input) {
-			return true;
-		} else {
-			return false;
-		}
+		return !!(typeof this.streamCatcher.input !== 'undefined' && this.streamCatcher.input) 
 	}
 
 	/**
@@ -305,7 +299,7 @@ export class PerlDebugSession extends LoggingDebugSession {
 		// start the program in the runtime
 		// Spawn perl process and handle errors
 		logger.log(`CWD: ${args.cwd}`);
-		let env: NodeJS.ProcessEnv = {
+		const env: NodeJS.ProcessEnv = {
 			...process.env,
 			...args.env,
 			// eslint-disable-next-line @typescript-eslint/naming-convention
@@ -320,7 +314,8 @@ export class PerlDebugSession extends LoggingDebugSession {
 		const spawnOptions: SpawnOptions = {
 			detached: true,
 			cwd: args.cwd,
-			env: env
+			env: env,
+			stdio: 'pipe'
 		};
 
 		args.program = this.normalizePathAndCasing(args.program);
