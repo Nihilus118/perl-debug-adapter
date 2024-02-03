@@ -23,3 +23,5 @@
 * Improvements for bundling the debug-adapter.
 ## 1.0.6
 * Read from &lt;STDIN&gt;
+## 1.0.7
+* Fix regular expression providing inline values
