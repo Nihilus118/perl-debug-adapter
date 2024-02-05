@@ -16,7 +16,7 @@ It should work out of the box on Linux, Windows and Mac using VS Code. It also w
 ### Other Editors and IDEs
 
 
-* [NVIM](https://github.com/mfussenegger/nvim-dap/wiki/Debug-Adapter-installation#vscode-perl-debug)
+* [NVIM](https://github.com/mfussenegger/nvim-dap/wiki/Debug-Adapter-installation#perl-debug-adapter)
 
 As this extension implements the Debug Adapter Protocol it should be usable with [other editors and IDEs](https://microsoft.github.io/debug-adapter-protocol/implementors/tools/) aswell.
 Feel free to try it out and report any bugs that may occur.
