@@ -24,7 +24,6 @@ if (port > 0) {
 		session.start(socket, socket);
 	}).listen(port);
 } else {
-
 	// start a single session that communicates via stdin/stdout
 	const session = new PerlDebugSession();
 	process.on('SIGTERM', () => {

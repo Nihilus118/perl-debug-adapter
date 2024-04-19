@@ -388,6 +388,9 @@ export class PerlDebugSession extends LoggingDebugSession {
 			// do not print return values on return-command
 			await this.request('o PrintRet=0');
 
+			// disable buffering to STDOUT
+			await this.request('$| = 1');
+
 			// stop when loading a new file and check if we can call continue after the stop
 			await this.request('package DB; *DB::postponed = sub { return sub { if ( \'GLOB\' eq ref(\\$_[0]) && $_[0] =~ /<(.*)\\s*$/s) { if ($DB::single == 0) { print STDERR "continue "; } $DB::single = 1; print STDERR "loaded source $1\\n"; } } ; }->(\\\\&DB::postponed)');
 
