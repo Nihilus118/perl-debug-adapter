@@ -102,8 +102,8 @@ export class PerlDebugSession extends LoggingDebugSession {
 				path = `${matched[1].toUpperCase()}${matched[2]}`;
 			}
 			return path.replace(/\//g, '\\');
-		} 
-        return path.replace(/\\/g, '/');
+		}
+		return path.replace(/\\/g, '/');
 	}
 
 	/**
@@ -189,7 +189,7 @@ export class PerlDebugSession extends LoggingDebugSession {
 	 * Checks if the perl5db-runtime is currently active.
 	 */
 	private isActive(): boolean {
-		return !!(typeof this.streamCatcher.input !== 'undefined' && this.streamCatcher.input) 
+		return !!(typeof this.streamCatcher.input !== 'undefined' && this.streamCatcher.input);
 	}
 
 	/**
@@ -276,7 +276,7 @@ export class PerlDebugSession extends LoggingDebugSession {
 		super.configurationDoneRequest(response, args);
 	}
 
-	protected async launchRequest(response: DebugProtocol.LaunchResponse, args: ILaunchRequestArguments) {
+	protected async launchRequest(response: DebugProtocol.LaunchResponse, args: ILaunchRequestArguments): Promise<void> {
 
 		// reset breakpointID and clear maps
 		this.currentBreakpointID = 1;
@@ -609,7 +609,14 @@ export class PerlDebugSession extends LoggingDebugSession {
 				];
 			}
 			if (varNames[0] !== '') {
-				parsedVars = await this.parseVars(varNames);
+				try {
+					parsedVars = await this.parseVars(varNames);
+				} catch (error) {
+					this.logSendEvent(new OutputEvent(`Could not parse variables ${varNames}: ${error}`, 'stderr'));
+					response.success = false;
+					this.logSendResponse(response);
+					return;
+				}
 			}
 		} else {
 			// get already parsed vars from map
@@ -683,7 +690,7 @@ export class PerlDebugSession extends LoggingDebugSession {
 					// Continue every time we reach a breakpoint during this call until we have proper output
 					if (varDump[0].match(/^\$VAR1\s=\s.*/)) {
 						break;
-					} else if (varDump[0].match(/^Can't call method ".*" on an undefined value at .* line \d+\.$/)) {
+					} else if (varDump[0].match(/^.* at .* line \d+\.$/)) {
 						varDump = [];
 						break;
 					} else {
