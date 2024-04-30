@@ -22,6 +22,7 @@ interface ILaunchRequestArguments extends DebugProtocol.LaunchRequestArguments {
 	perl5db?: string;
 	maxArrayElements?: number;
 	maxHashElements?: number;
+	sortKeys?: boolean;
 }
 
 interface IFunctionBreakpointData {
@@ -55,8 +56,11 @@ export class PerlDebugSession extends LoggingDebugSession {
 	private streamCatcher: StreamCatcher = new StreamCatcher;
 	// max tries to set a breakpoint
 	private maxBreakpointTries: number = 10;
+
 	private maxArrayElements: number = 100;
 	private maxHashElements: number = 100;
+
+	private sortKeys: boolean = false;
 
 	constructor() {
 		super('perl-debug.txt');
@@ -303,6 +307,9 @@ export class PerlDebugSession extends LoggingDebugSession {
 		// set max array and hash depth
 		this.maxArrayElements = args.maxArrayElements || 100;
 		this.maxHashElements = args.maxHashElements || 100;
+
+		// set sortkeys
+		this.sortKeys = args.sortKeys || false;
 
 		// start the program in the runtime
 		// Spawn perl process and handle errors
@@ -692,7 +699,7 @@ export class PerlDebugSession extends LoggingDebugSession {
 				varName = `{${varName}}`;
 			}
 
-			let varDump = (await this.request(`print STDERR Data::Dumper->new([${varName}], [])->Deepcopy(1)->Indent(1)->Terse(0)->Sortkeys(0)->Trailingcomma(1)->Useqq(1)->Dump()`)).filter(e => { return e !== ''; }).slice(1, -1);
+			let varDump = (await this.request(`print STDERR Data::Dumper->new([${varName}], [])->Deepcopy(1)->Indent(1)->Terse(0)->Sortkeys(${this.sortKeys ? '1' : '0'})->Trailingcomma(1)->Useqq(1)->Dump()`)).filter(e => { return e !== ''; }).slice(1, -1);
 			try {
 				while (true) {
 					// Continue every time we reach a breakpoint during this call until we have proper output

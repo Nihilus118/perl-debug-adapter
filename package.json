@@ -195,6 +195,11 @@
                 "type": "number",
                 "description": "Maximum amount of child variables of a hash to display in the variables view.",
                 "default": 100
+              },
+              "sortKeys": {
+                "type": "boolean",
+                "description": "Sort hash keys alphabetically.",
+                "default": false
               }
             }
           }
