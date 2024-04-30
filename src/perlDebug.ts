@@ -20,6 +20,8 @@ interface ILaunchRequestArguments extends DebugProtocol.LaunchRequestArguments {
 	trace?: boolean;
 	escapeSpecialChars?: boolean;
 	perl5db?: string;
+	maxArrayElements?: number;
+	maxHashElements?: number;
 }
 
 interface IFunctionBreakpointData {
@@ -297,6 +299,10 @@ export class PerlDebugSession extends LoggingDebugSession {
 		} else {
 			logger.setup(Logger.LogLevel.Warn, false);
 		}
+
+		// set max array and hash depth
+		this.maxArrayElements = args.maxArrayElements || 100;
+		this.maxHashElements = args.maxHashElements || 100;
 
 		// start the program in the runtime
 		// Spawn perl process and handle errors

@@ -185,6 +185,16 @@
                 "type": "string",
                 "description": "Sets the PERL5DB environment variable",
                 "default": ""
+              },
+              "maxArrayElements": {
+                "type": "number",
+                "description": "Maximum amount of child variables of an array to display in the variables view.",
+                "default": 100
+              },
+              "maxHashElements": {
+                "type": "number",
+                "description": "Maximum amount of child variables of a hash to display in the variables view.",
+                "default": 100
               }
             }
           }
