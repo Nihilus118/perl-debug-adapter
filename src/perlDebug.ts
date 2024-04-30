@@ -53,7 +53,8 @@ export class PerlDebugSession extends LoggingDebugSession {
 	private streamCatcher: StreamCatcher = new StreamCatcher;
 	// max tries to set a breakpoint
 	private maxBreakpointTries: number = 10;
-	private maxArrayElements: number = 1000;
+	private maxArrayElements: number = 100;
+	private maxHashElements: number = 100;
 
 	constructor() {
 		super('perl-debug.txt');
@@ -685,7 +686,7 @@ export class PerlDebugSession extends LoggingDebugSession {
 				varName = `{${varName}}`;
 			}
 
-			let varDump = (await this.request(`print STDERR Data::Dumper->new([${varName}], [])->Deepcopy(1)->Indent(1)->Terse(0)->Trailingcomma(1)->Useqq(1)->Dump()`)).filter(e => { return e !== ''; }).slice(1, -1);
+			let varDump = (await this.request(`print STDERR Data::Dumper->new([${varName}], [])->Deepcopy(1)->Indent(1)->Terse(0)->Sortkeys(0)->Trailingcomma(1)->Useqq(1)->Dump()`)).filter(e => { return e !== ''; }).slice(1, -1);
 			try {
 				while (true) {
 					// Continue every time we reach a breakpoint during this call until we have proper output
@@ -783,9 +784,8 @@ export class PerlDebugSession extends LoggingDebugSession {
 	private isVarEnd = /^(\}|\]),?(\s?'(.*)'\s\))?[,|;]/;
 	// Parse output of Data::Dumper
 	private async parseDumper(lines: string[]): Promise<{ parsedLines: number, varType: string, numChildVars: number; }> {
-		let cv: DebugProtocol.Variable[] = [];
+		let childVars: DebugProtocol.Variable[] = [];
 		let varType: string = '';
-		let arrayIndex: number = 0;
 		const ref: number = this.currentVarRef;
 		this.currentVarRef--;
 
@@ -799,26 +799,28 @@ export class PerlDebugSession extends LoggingDebugSession {
 			} else {
 				matched = line.match(this.isNamedVariable);
 				if (matched) {
-					cv.push({
+					childVars.push({
 						name: matched[1].replace(/"/, ''),
 						value: matched[2],
 						variablesReference: 0,
 						presentationHint: { kind: 'data' },
 						type: 'SCALAR'
 					});
+					if (childVars.length >= this.maxHashElements) {
+						break;
+					}
 					continue;
 				}
 				matched = line.match(this.isIndexedVariable);
 				if (matched) {
-					cv.push({
-						name: `${arrayIndex}`,
+					childVars.push({
+						name: `${childVars.length}`,
 						value: matched[1],
 						variablesReference: 0,
 						presentationHint: { kind: 'data' },
 						type: 'SCALAR'
 					});
-					arrayIndex++;
-					if (arrayIndex >= this.maxArrayElements) {
+					if (childVars.length >= this.maxArrayElements) {
 						break;
 					}
 					continue;
@@ -826,7 +828,7 @@ export class PerlDebugSession extends LoggingDebugSession {
 				matched = line.match(this.isNestedArray);
 				if (matched) {
 					const newVar: DebugProtocol.Variable = {
-						name: `${arrayIndex}`,
+						name: `${childVars.length}`,
 						value: '',
 						variablesReference: this.currentVarRef,
 						presentationHint: { kind: 'innerClass' }
@@ -837,9 +839,8 @@ export class PerlDebugSession extends LoggingDebugSession {
 					newVar.value = parsed.varType;
 					newVar.type = parsed.varType;
 					newVar.indexedVariables = parsed.numChildVars;
-					cv.push(newVar);
-					arrayIndex++;
-					if (arrayIndex >= this.maxArrayElements) {
+					childVars.push(newVar);
+					if (childVars.length >= this.maxArrayElements) {
 						break;
 					}
 					continue;
@@ -858,15 +859,15 @@ export class PerlDebugSession extends LoggingDebugSession {
 					newVar.value = parsed.varType;
 					newVar.type = parsed.varType;
 					newVar.namedVariables = parsed.numChildVars;
-					cv.push(newVar);
+					childVars.push(newVar);
 					continue;
 				}
 				logger.error(`Unrecognized Data::Dumper line: ${line}`);
 				logger.log(`All lines in current variable scope: ${lines.join('\n')}`);
 			}
 		}
-		this.childVarsMap.set(ref, cv);
-		return { parsedLines: i + 1, varType: varType, numChildVars: cv.length };
+		this.childVarsMap.set(ref, childVars);
+		return { parsedLines: i + 1, varType: varType, numChildVars: childVars.length };
 	}
 
 	protected async setVariableRequest(response: DebugProtocol.SetVariableResponse, args: DebugProtocol.SetVariableArguments): Promise<void> {
