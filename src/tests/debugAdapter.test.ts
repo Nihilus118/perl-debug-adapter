@@ -25,7 +25,8 @@ describe('Perl Debug Adapter', () => {
 			name: 'Perl Debug',
 			program: PERL_SCRIPT,
 			stopOnEntry: true,
-			cwd: CWD
+			cwd: CWD,
+			sortKeys: true,
 		});
 	});
 
@@ -125,7 +126,8 @@ describe('Perl Debug Adapter', () => {
 				name: 'Perl Debug',
 				program: BROKEN_PERL_SCRIPT,
 				stopOnEntry: true,
-				cwd: CWD
+				cwd: CWD,
+				sortKeys: true,
 			}).then(() => {
 				fail('launch request should not complete');
 			}).catch(() => {
