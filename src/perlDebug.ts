@@ -52,7 +52,8 @@ export class PerlDebugSession extends LoggingDebugSession {
 	// helper to run commands and parse output
 	private streamCatcher: StreamCatcher = new StreamCatcher;
 	// max tries to set a breakpoint
-	private maxBreakpointTries = 10;
+	private maxBreakpointTries: number = 10;
+	private maxArrayElements: number = 1000;
 
 	constructor() {
 		super('perl-debug.txt');
@@ -684,7 +685,7 @@ export class PerlDebugSession extends LoggingDebugSession {
 				varName = `{${varName}}`;
 			}
 
-			let varDump = (await this.request(`print STDERR Data::Dumper->new([${varName}], [])->Deepcopy(1)->Sortkeys(1)->Indent(1)->Terse(0)->Trailingcomma(1)->Useqq(1)->Dump()`)).filter(e => { return e !== ''; }).slice(1, -1);
+			let varDump = (await this.request(`print STDERR Data::Dumper->new([${varName}], [])->Deepcopy(1)->Indent(1)->Terse(0)->Trailingcomma(1)->Useqq(1)->Dump()`)).filter(e => { return e !== ''; }).slice(1, -1);
 			try {
 				while (true) {
 					// Continue every time we reach a breakpoint during this call until we have proper output
@@ -783,9 +784,9 @@ export class PerlDebugSession extends LoggingDebugSession {
 	// Parse output of Data::Dumper
 	private async parseDumper(lines: string[]): Promise<{ parsedLines: number, varType: string, numChildVars: number; }> {
 		let cv: DebugProtocol.Variable[] = [];
-		let varType = '';
-		let arrayIndex = 0;
-		const ref = this.currentVarRef;
+		let varType: string = '';
+		let arrayIndex: number = 0;
+		const ref: number = this.currentVarRef;
 		this.currentVarRef--;
 
 		let i: number;
@@ -817,6 +818,9 @@ export class PerlDebugSession extends LoggingDebugSession {
 						type: 'SCALAR'
 					});
 					arrayIndex++;
+					if (arrayIndex >= this.maxArrayElements) {
+						break;
+					}
 					continue;
 				}
 				matched = line.match(this.isNestedArray);
@@ -835,6 +839,9 @@ export class PerlDebugSession extends LoggingDebugSession {
 					newVar.indexedVariables = parsed.numChildVars;
 					cv.push(newVar);
 					arrayIndex++;
+					if (arrayIndex >= this.maxArrayElements) {
+						break;
+					}
 					continue;
 				}
 				matched = line.match(this.isNestedHash);
@@ -855,7 +862,7 @@ export class PerlDebugSession extends LoggingDebugSession {
 					continue;
 				}
 				logger.error(`Unrecognized Data::Dumper line: ${line}`);
-				logger.error(`All lines in current variable scope: ${lines.join('\n')}`);
+				logger.log(`All lines in current variable scope: ${lines.join('\n')}`);
 			}
 		}
 		this.childVarsMap.set(ref, cv);
