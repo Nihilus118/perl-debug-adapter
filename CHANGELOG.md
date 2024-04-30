@@ -25,3 +25,7 @@
 * Read from &lt;STDIN&gt;
 ## 1.0.7
 * Fix regular expression providing inline values
+## 1.0.8
+* Add option maxArrayElements
+* Add option maxHashElements
+* Add option sortKeys
