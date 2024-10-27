@@ -4,6 +4,7 @@ import * as vscode from 'vscode';
 import { DebugConfiguration, ProviderResult, WorkspaceFolder } from 'vscode';
 
 const VARIABLE_REGEXP = /((\$|@|%)(?![0-9]+)(?![0-9]+[a-z]*$)[a-z0-9_]+)((\->)?(\{"[a-z0-9_\s]+"\}|\{'[a-z0-9_\s]+'\}|\[\d+\]|\{\$[a-z0-9_]+\}|::[a-z0-9_]+))*/gi;
+const COMMENT_REGEXP = /#.*$/g;
 
 export function activatePerlDebug(context: vscode.ExtensionContext, factory: vscode.DebugAdapterDescriptorFactory) {
 
@@ -68,7 +69,7 @@ export function activatePerlDebug(context: vscode.ExtensionContext, factory: vsc
 	context.subscriptions.push(vscode.languages.registerEvaluatableExpressionProvider('perl', {
 		provideEvaluatableExpression(document: vscode.TextDocument, position: vscode.Position): vscode.ProviderResult<vscode.EvaluatableExpression> {
 
-			const line = document.lineAt(position.line).text;
+			let line = document.lineAt(position.line).text.replace(COMMENT_REGEXP, '');
 
 			let m: RegExpExecArray | null;
 			while (m = VARIABLE_REGEXP.exec(line)) {
@@ -89,17 +90,14 @@ export function activatePerlDebug(context: vscode.ExtensionContext, factory: vsc
 			const allValues: vscode.InlineValue[] = [];
 
 			for (let l = viewport.start.line; l <= context.stoppedLocation.end.line; l++) {
-				const line = document.lineAt(l);
-				do {
-					var m = VARIABLE_REGEXP.exec(line.text);
-					if (m) {
-						const varName = m[0];
-						const varRange = new vscode.Range(l, m.index, l, m.index + varName.length);
+				let line = document.lineAt(l).text.replace(COMMENT_REGEXP, '');
 
-						// value determined via expression evaluation
-						allValues.push(new vscode.InlineValueEvaluatableExpression(varRange, varName));
-					}
-				} while (m);
+				let m: RegExpExecArray | null;
+				while (m = VARIABLE_REGEXP.exec(line)) {
+					const varName = m[0];
+					const varRange = new vscode.Range(l, m.index, l, m.index + varName.length);
+					allValues.push(new vscode.InlineValueEvaluatableExpression(varRange, varName));
+				}
 			}
 			return allValues;
 		}
