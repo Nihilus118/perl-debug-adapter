@@ -26,6 +26,12 @@
 ## 1.0.7
 * Fix regular expression providing inline values
 ## 1.0.8
+* Disable buffering of output sent to STDOUT
+* Fix error handling when parsing variables
+## 1.0.9
 * Add option maxArrayElements
 * Add option maxHashElements
 * Add option sortKeys
+## 1.0.10
+* Add option to deepcopy before parsing a variable
+* Fix inline variables showing for comments
