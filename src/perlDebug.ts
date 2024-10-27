@@ -62,6 +62,8 @@ export class PerlDebugSession extends LoggingDebugSession {
 
 	private sortKeys: boolean = false;
 
+	private deepcopy: boolean = false;
+
 	constructor() {
 		super('perl-debug.txt');
 
@@ -699,7 +701,7 @@ export class PerlDebugSession extends LoggingDebugSession {
 				varName = `{${varName}}`;
 			}
 
-			let varDump = (await this.request(`print STDERR Data::Dumper->new([${varName}], [])->Deepcopy(1)->Indent(1)->Terse(0)->Sortkeys(${this.sortKeys ? '1' : '0'})->Trailingcomma(1)->Useqq(1)->Dump()`)).filter(e => { return e !== ''; }).slice(1, -1);
+			let varDump = (await this.request(`print STDERR Data::Dumper->new([${varName}], [])->Deepcopy(${this.deepcopy ? '1' : '0'})->Indent(1)->Terse(0)->Sortkeys(${this.sortKeys ? '1' : '0'})->Trailingcomma(1)->Useqq(1)->Dump()`)).filter(e => { return e !== ''; }).slice(1, -1);
 			try {
 				while (true) {
 					// Continue every time we reach a breakpoint during this call until we have proper output
@@ -745,7 +747,7 @@ export class PerlDebugSession extends LoggingDebugSession {
 					} else {
 						this.currentVarRef--;
 						const ref = this.currentVarRef;
-						await this.parseDumper(varDump.slice(1, -1));
+						this.parseDumper(varDump.slice(1, -1));
 						const matched = varDump[varDump.length - 1].trim().match(this.isVarEnd);
 						const type = `${(matched![1] === '}' ? 'HASH' : 'ARRAY')}${(matched![3] ? ` ${matched![3]}` : '')}`;
 						const newVar: DebugProtocol.Variable = {
@@ -796,7 +798,7 @@ export class PerlDebugSession extends LoggingDebugSession {
 	private isNestedArray = /^(bless\(\s*)?(\{|\[)$/;
 	private isVarEnd = /^(\}|\]),?(\s?'(.*)'\s\))?[,|;]/;
 	// Parse output of Data::Dumper
-	private async parseDumper(lines: string[]): Promise<{ parsedLines: number, varType: string, numChildVars: number; }> {
+	private parseDumper(lines: string[]): { parsedLines: number, varType: string, numChildVars: number; } {
 		let childVars: DebugProtocol.Variable[] = [];
 		let varType: string = '';
 		const ref: number = this.currentVarRef;
@@ -804,80 +806,79 @@ export class PerlDebugSession extends LoggingDebugSession {
 
 		let i: number;
 		for (i = 0; i < lines.length; i++) {
-			const line = lines[i].trim();
+			const line = lines[i];
 			let matched = line.match(this.isVarEnd);
 			if (matched) {
 				varType = `${(matched[1] === '}' ? 'HASH' : 'ARRAY')}${(matched[3] ? ` ${matched[3]}` : '')}`;
 				break;
-			} else {
-				matched = line.match(this.isNamedVariable);
-				if (matched) {
-					childVars.push({
-						name: matched[1].replace(/"/, ''),
-						value: matched[2],
-						variablesReference: 0,
-						presentationHint: { kind: 'data' },
-						type: 'SCALAR'
-					});
-					if (childVars.length >= this.maxHashElements) {
-						break;
-					}
-					continue;
-				}
-				matched = line.match(this.isIndexedVariable);
-				if (matched) {
-					childVars.push({
-						name: `${childVars.length}`,
-						value: matched[1],
-						variablesReference: 0,
-						presentationHint: { kind: 'data' },
-						type: 'SCALAR'
-					});
-					if (childVars.length >= this.maxArrayElements) {
-						break;
-					}
-					continue;
-				}
-				matched = line.match(this.isNestedArray);
-				if (matched) {
-					const newVar: DebugProtocol.Variable = {
-						name: `${childVars.length}`,
-						value: '',
-						variablesReference: this.currentVarRef,
-						presentationHint: { kind: 'innerClass' }
-					};
-					this.parentVarsMap.set(this.currentVarRef, newVar);
-					const parsed = await this.parseDumper(lines.slice(i + 1));
-					i += parsed.parsedLines;
-					newVar.value = parsed.varType;
-					newVar.type = parsed.varType;
-					newVar.indexedVariables = parsed.numChildVars;
-					childVars.push(newVar);
-					if (childVars.length >= this.maxArrayElements) {
-						break;
-					}
-					continue;
-				}
-				matched = line.match(this.isNestedHash);
-				if (matched) {
-					const newVar: DebugProtocol.Variable = {
-						name: matched[1],
-						value: '',
-						variablesReference: this.currentVarRef,
-						presentationHint: { kind: 'innerClass' }
-					};
-					this.parentVarsMap.set(this.currentVarRef, newVar);
-					const parsed = await this.parseDumper(lines.slice(i + 1));
-					i += parsed.parsedLines;
-					newVar.value = parsed.varType;
-					newVar.type = parsed.varType;
-					newVar.namedVariables = parsed.numChildVars;
-					childVars.push(newVar);
-					continue;
-				}
-				logger.error(`Unrecognized Data::Dumper line: ${line}`);
-				logger.log(`All lines in current variable scope: ${lines.join('\n')}`);
 			}
+			matched = line.match(this.isNamedVariable);
+			if (matched) {
+				childVars.push({
+					name: matched[1].replace(/"/, ''),
+					value: matched[2],
+					variablesReference: 0,
+					presentationHint: { kind: 'data' },
+					type: 'SCALAR'
+				});
+				if (childVars.length >= this.maxHashElements) {
+					break;
+				}
+				continue;
+			}
+			matched = line.match(this.isIndexedVariable);
+			if (matched) {
+				childVars.push({
+					name: `${childVars.length}`,
+					value: matched[1],
+					variablesReference: 0,
+					presentationHint: { kind: 'data' },
+					type: 'SCALAR'
+				});
+				if (childVars.length >= this.maxArrayElements) {
+					break;
+				}
+				continue;
+			}
+			matched = line.match(this.isNestedArray);
+			if (matched) {
+				const newVar: DebugProtocol.Variable = {
+					name: `${childVars.length}`,
+					value: '',
+					variablesReference: this.currentVarRef,
+					presentationHint: { kind: 'innerClass' }
+				};
+				this.parentVarsMap.set(this.currentVarRef, newVar);
+				const parsed = this.parseDumper(lines.slice(i + 1));
+				i += parsed.parsedLines;
+				newVar.value = parsed.varType;
+				newVar.type = parsed.varType;
+				newVar.indexedVariables = parsed.numChildVars;
+				childVars.push(newVar);
+				if (childVars.length >= this.maxArrayElements) {
+					break;
+				}
+				continue;
+			}
+			matched = line.match(this.isNestedHash);
+			if (matched) {
+				const newVar: DebugProtocol.Variable = {
+					name: matched[1],
+					value: '',
+					variablesReference: this.currentVarRef,
+					presentationHint: { kind: 'innerClass' }
+				};
+				this.parentVarsMap.set(this.currentVarRef, newVar);
+				const parsed = this.parseDumper(lines.slice(i + 1));
+				i += parsed.parsedLines;
+				newVar.value = parsed.varType;
+				newVar.type = parsed.varType;
+				newVar.namedVariables = parsed.numChildVars;
+				childVars.push(newVar);
+				continue;
+			}
+			logger.error(`Unrecognized Data::Dumper line: ${line}`);
+			logger.log(`All lines in current variable scope: ${lines.join('\n')}`);
 		}
 		this.childVarsMap.set(ref, childVars);
 		return { parsedLines: i + 1, varType: varType, numChildVars: childVars.length };
