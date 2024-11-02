@@ -99,7 +99,9 @@ export class PerlDebugSession extends LoggingDebugSession {
 	 */
 	private async request(command: string): Promise<string[]> {
 		logger.log(`Command: ${command}`);
-		return (await this.streamCatcher.request(command));
+		const response = await this.streamCatcher.request(command);
+		logger.log(`Response for command ${command}: ${response.join('\n')}`);
+		return response;
 	}
 
 	/**
