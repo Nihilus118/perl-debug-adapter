@@ -35,3 +35,6 @@
 ## 1.0.10
 * Add option to deepcopy before parsing a variable
 * Fix inline variables showing for comments
+## 1.0.11
+* Improve compatibility with older versions of Perl/DataDumper
+* Improve logging
