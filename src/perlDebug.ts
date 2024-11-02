@@ -701,7 +701,7 @@ export class PerlDebugSession extends LoggingDebugSession {
 				varName = `{${varName}}`;
 			}
 
-			let varDump = (await this.request(`print STDERR Data::Dumper->new([${varName}], [])->Deepcopy(${this.deepcopy ? '1' : '0'})->Indent(1)->Terse(0)->Sortkeys(${this.sortKeys ? '1' : '0'})->Trailingcomma(1)->Useqq(1)->Dump()`)).filter(e => { return e !== ''; }).slice(1, -1);
+			let varDump = (await this.request(`print STDERR Data::Dumper->new([${varName}], [])->Deepcopy(${this.deepcopy ? '1' : '0'})->Indent(1)->Terse(0)->Sortkeys(${this.sortKeys ? '1' : '0'})->Useqq(1)->Dump()`)).filter(e => { return e !== ''; }).slice(1, -1);
 			try {
 				while (true) {
 					// Continue every time we reach a breakpoint during this call until we have proper output
@@ -793,10 +793,10 @@ export class PerlDebugSession extends LoggingDebugSession {
 
 	// Regexp for parsing the output of Data::Dumper
 	private isNamedVariable = /"?(.*)"?\s=>?\s(undef|".*"|'.*'|-?\d+|\[\]|\{\}|bless\(.*\)|sub\s\{.*\}|\\\*\{".*\"}|\\{1,2}\*.*)[,|;]$/;
-	private isIndexedVariable = /^(undef|".*"|'.*'|-?\d+|\[\]|\{\}|bless\(.*\)|sub\s\{.*\})[,|;]/;
+	private isIndexedVariable = /^(undef|".*"|'.*'|-?\d+|\[\]|\{\}|bless\(.*\)|sub\s\{.*\})[,|;]?/;
 	private isNestedHash = /"(.*)"\s=>?\s(bless\(\s)?(\[|\{)/;
 	private isNestedArray = /^(bless\(\s*)?(\{|\[)$/;
-	private isVarEnd = /^(\}|\]),?(\s?'(.*)'\s\))?[,|;]/;
+	private isVarEnd = /^(\}|\]),?(\s?'(.*)'\s\))?[,|;]?/;
 	// Parse output of Data::Dumper
 	private parseDumper(lines: string[]): { parsedLines: number, varType: string, numChildVars: number; } {
 		let childVars: DebugProtocol.Variable[] = [];
