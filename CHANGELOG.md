@@ -38,3 +38,5 @@
 ## 1.0.11
 * Improve compatibility with older versions of Perl/DataDumper
 * Improve logging
+## 1.0.12
+* Improve compatibility with older versions of Perl (Issue#21)
