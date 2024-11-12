@@ -902,7 +902,7 @@ export class PerlDebugSession extends LoggingDebugSession {
 	protected async loadedSourcesRequest(response: DebugProtocol.LoadedSourcesResponse, args: DebugProtocol.LoadedSourcesArguments, request?: DebugProtocol.Request): Promise<void> {
 		let sources: Source[] = [];
 
-		const lines = await this.request('foreach my $INCKEY (keys %INC) { print STDERR $INCKEY . "||" . %INC{$INCKEY} . "\\n" }');
+		const lines = await this.request('foreach my $INCKEY (keys %INC) { print STDERR "$INCKEY||$INC{$INCKEY}\\n" }');
 		// remove first and last line
 		lines.filter(e => { return e !== ''; }).slice(1, -1).forEach(line => {
 			const tmp = line.split('||');
