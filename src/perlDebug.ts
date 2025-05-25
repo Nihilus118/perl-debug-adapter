@@ -23,6 +23,8 @@ interface ILaunchRequestArguments extends DebugProtocol.LaunchRequestArguments {
 	maxArrayElements?: number;
 	maxHashElements?: number;
 	sortKeys?: boolean;
+	deepcopy?: boolean;
+	wrapperCommand?: string[];
 }
 
 interface IFunctionBreakpointData {
@@ -315,6 +317,9 @@ export class PerlDebugSession extends LoggingDebugSession {
 		// set sortkeys
 		this.sortKeys = args.sortKeys || false;
 
+		// set deepcopy
+		this.deepcopy = args.deepcopy || false;
+
 		// start the program in the runtime
 		// Spawn perl process and handle errors
 		logger.log(`CWD: ${args.cwd}`);
@@ -352,10 +357,23 @@ export class PerlDebugSession extends LoggingDebugSession {
 
 		// launch the debugger
 		args.perlExecutable = args.perlExecutable || 'perl';
-		logger.log(`Perl executable: ${args.perlExecutable}`);
+		let spawnCommand = args.perlExecutable;
+		let spawnArgs = commandArgs;
+		if (args.wrapperCommand && Array.isArray(args.wrapperCommand) && args.wrapperCommand.length > 0) {
+			spawnCommand = args.wrapperCommand[0];
+			spawnArgs = [
+				...args.wrapperCommand.slice(1),
+				args.perlExecutable,
+				...commandArgs
+			];
+			logger.log(`Wrapper command detected: ${args.wrapperCommand.join(' ')}`);
+			logger.log(`Full command: ${spawnCommand} ${spawnArgs.join(' ')}`);
+		} else {
+			logger.log(`Perl executable: ${args.perlExecutable}`);
+		}
 		this._session = spawn(
-			args.perlExecutable,
-			commandArgs,
+			spawnCommand,
+			spawnArgs,
 			spawnOptions
 		);
 

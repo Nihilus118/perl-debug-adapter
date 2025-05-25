@@ -205,6 +205,14 @@
                 "type": "boolean",
                 "description": "Deep copy variables to prevent modification of the original data.",
                 "default": false
+              },
+              "wrapperCommand": {
+                "type": "array",
+                "description": "Optional command and arguments to wrap the Perl execution, e.g. [\"carmel\", \"exec\"] or [\"carton\", \"exec\"].",
+                "items": {
+                  "type": "string"
+                },
+                "default": []
               }
             }
           }
