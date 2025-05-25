@@ -333,7 +333,9 @@ export class PerlDebugSession extends LoggingDebugSession {
 			// eslint-disable-next-line @typescript-eslint/naming-convention
 			LINES: '25',
 			// eslint-disable-next-line @typescript-eslint/naming-convention
-			TERM: 'dumb'
+			TERM: 'dumb',
+			// eslint-disable-next-line @typescript-eslint/naming-convention
+			PERLDB_OPTS: 'ReadLine=0'
 		};
 		const spawnOptions: SpawnOptions = {
 			detached: true,
