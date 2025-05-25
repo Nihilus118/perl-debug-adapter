@@ -769,21 +769,32 @@ export class PerlDebugSession extends LoggingDebugSession {
 						const ref = this.currentVarRef;
 						this.parseDumper(varDump.slice(1, -1));
 						const matched = varDump[varDump.length - 1].trim().match(this.isVarEnd);
-						const type = `${(matched![1] === '}' ? 'HASH' : 'ARRAY')}${(matched![3] ? ` ${matched![3]}` : '')}`;
-						const newVar: DebugProtocol.Variable = {
-							name: varNames[i],
-							value: type,
-							variablesReference: ref,
-							evaluateName: varNames[i],
-							presentationHint: { kind: 'baseClass' }
-						};
-						if (type.startsWith('HASH')) {
-							newVar.namedVariables = this.childVarsMap.get(ref)?.length;
-						} else if (type.startsWith('ARRAY')) {
-							newVar.indexedVariables = this.childVarsMap.get(ref)?.length;
+						if (matched) {
+							const type = `${(matched[1] === '}' ? 'HASH' : 'ARRAY')}${(matched[3] ? ` ${matched[3]}` : '')}`;
+							const newVar: DebugProtocol.Variable = {
+								name: varNames[i],
+								value: type,
+								variablesReference: ref,
+								evaluateName: varNames[i],
+								presentationHint: { kind: 'baseClass' }
+							};
+							if (type.startsWith('HASH')) {
+								newVar.namedVariables = this.childVarsMap.get(ref)?.length;
+							} else if (type.startsWith('ARRAY')) {
+								newVar.indexedVariables = this.childVarsMap.get(ref)?.length;
+							}
+							vs.push(newVar);
+							this.parentVarsMap.set(ref, newVar);
+						} else {
+							logger.error(`Could not parse variable end for ${varNames[i]}: ${varDump[varDump.length - 1]}`);
+							vs.push({
+								name: varNames[i],
+								value: 'undef',
+								variablesReference: 0,
+								presentationHint: { kind: 'data' },
+								type: 'UNDEF'
+							});
 						}
-						vs.push(newVar);
-						this.parentVarsMap.set(ref, newVar);
 					}
 				} else {
 					vs.push({
