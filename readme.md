@@ -13,6 +13,8 @@ It should work out of the box on Linux, Windows and Mac using VS Code. It also w
 * The PadWalker module needs to be available in your environment.
 * **OPTIONAL** I recommend using this extension together with BSCANs [Perl Navigator](https://marketplace.visualstudio.com/items?itemName=bscan.perlnavigator) as it provides great language server features out of the box.
 
+Forked Perl debugging is currently not supported by this adapter. When `perl5db` reports that it cannot create a new TTY for a forked child, the session is terminated to avoid corrupted debugger state.
+
 ### Other Editors and IDEs
 
 

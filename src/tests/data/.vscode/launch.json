@@ -1,0 +1,28 @@
+{
+    // Use IntelliSense to learn about possible attributes.
+    // Hover to view descriptions of existing attributes.
+    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "type": "perl",
+            "request": "launch",
+            "name": "Perl Debug",
+            "program": "${workspaceFolder}/${relativeFile}",
+            "stopOnEntry": false,
+            // "trace": true,
+            // "maxArrayElements": 10,
+            // "maxHashElements": 10,
+            // "sortKeys": true,
+            // "perlExecutable": "C:\\berrybrew\\instance\\5.10.1_32\\perl\\bin\\perl.exe"
+        },
+        {
+            "type": "perl",
+            "request": "launch",
+            "name": "Perl Debug Fork Socket Manual",
+            "program": "${workspaceFolder}/fork_socket_manual.pl",
+            "transport": "socket",
+            "trace": true
+        }
+    ]
+}
