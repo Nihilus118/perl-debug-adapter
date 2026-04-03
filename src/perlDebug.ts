@@ -458,21 +458,28 @@ export class PerlDebugSession extends LoggingDebugSession {
 	 * Changes the file context inside the perl5db-process.
 	 */
 	private async changeFileContext(filePath: string, threadId: number = PerlDebugSession.threadId): Promise<string | undefined> {
-		let formattedPath = filePath
-			.replace(/\\{1,2}/g, '/')
-			.replace(/^\.\.\/+/g, '');
-		let data = (await this.request(`f ${formattedPath}`, threadId))[1];
-		if (data.match(/^No file matching '.*' is loaded./)) {
-			logger.log(`Could not change file context: ${data}`);
-			formattedPath = basename(formattedPath);
-			data = (await this.request(`f ${formattedPath}`, threadId))[1];
-			if (data.match(/^No file matching '.*' is loaded./)) {
-				logger.log(`Could not change file context: ${data}`);
-				return undefined;
+		const normalizedPath = this.normalizePathAndCasing(filePath).replace(/^\.\.\/+/g, '');
+		const candidates = Array.from(new Set([
+			basename(normalizedPath),
+			normalizedPath,
+			normalizedPath.replace(/\\{1,2}/g, '/')
+		].filter((candidate) => candidate.length > 0)));
+
+		let lastError = '';
+		for (let i = 0; i < candidates.length; i++) {
+			const candidate = candidates[i];
+			const data = (await this.request(`f ${candidate}`, threadId))[1];
+			if (!data.match(/^No file matching '.*' is loaded./)) {
+				logger.log(`Successfully changed file context to ${candidate}: ${data}`);
+				return candidate;
 			}
+			lastError = data;
 		}
-		logger.log(`Successfully changed file context to ${formattedPath}: ${data}`);
-		return formattedPath;
+
+		if (lastError) {
+			logger.log(`Could not change file context: ${lastError}`);
+		}
+		return undefined;
 	}
 
 	/**
