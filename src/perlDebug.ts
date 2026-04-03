@@ -351,7 +351,6 @@ export class PerlDebugSession extends LoggingDebugSession {
 
 		this.logSendEvent(new TerminatedEvent());
 	}
-
 	private cleanupDebuggerTransport(): void {
 		this.frameThreadMap.clear();
 		this.variableThreadMap.clear();
@@ -439,7 +438,6 @@ export class PerlDebugSession extends LoggingDebugSession {
 			});
 		});
 	}
-
 	/**
 	 * This function normalizes paths depending on the OS the debugger is running on.
 	 */
@@ -1270,9 +1268,9 @@ export class PerlDebugSession extends LoggingDebugSession {
 	}
 
 	// Regexp for parsing the output of Data::Dumper
-	private isNamedVariable = /"?(.*)"?\s=>?\s(undef|".*"|'.*'|-?\d+|\[\]|\{\}|bless\(.*\)|sub\s\{.*\}|\\\*\{".*\"}|\\{1,2}\*.*)[,|;]$/;
+	private isNamedVariable = /"?(.*)"?\s=>?\s(undef|".*"|'.*'|-?\d+|\[\]|\{\}|bless\(.*\)|sub\s\{.*\}|\\\*\{".*\"}|\\{1,2}\*.*)[,|;]?$/;
 	private isIndexedVariable = /^(undef|".*"|'.*'|-?\d+|\[\]|\{\}|bless\(.*\)|sub\s\{.*\})[,|;]?/;
-	private isNestedHash = /"(.*)"\s=>?\s(bless\(\s)?(\[|\{)/;
+	private isNestedHash = /"(.*)"\s=>?\s(?:bless\(\s*)?(\[|\{)\s*$/;
 	private isNestedArray = /^(bless\(\s*)?(\{|\[)$/;
 	private isVarEnd = /^(\}|\]),?(\s?'(.*)'\s\))?[,|;]?/;
 	// Parse output of Data::Dumper
@@ -1289,6 +1287,27 @@ export class PerlDebugSession extends LoggingDebugSession {
 				varType = `${(matched[1] === '}' ? 'HASH' : 'ARRAY')}${(matched[3] ? ` ${matched[3]}` : '')}`;
 				break;
 			}
+			matched = line.match(this.isNamedVariable);
+			const nestedHash = line.match(this.isNestedHash);
+			if (nestedHash) {
+				const childRef = this.peekVarRef(threadId);
+				const newVar: DebugProtocol.Variable = {
+					name: nestedHash[1],
+					value: '',
+					variablesReference: childRef,
+					presentationHint: { kind: 'innerClass' }
+				};
+				this.parentVarsMap.set(this.getScopedVarRef(threadId, childRef), newVar);
+				this.variableThreadMap.set(childRef, threadId);
+				const parsed = this.parseDumper(lines.slice(i + 1), threadId);
+				i += parsed.parsedLines;
+				newVar.value = parsed.varType;
+				newVar.type = parsed.varType;
+				newVar.namedVariables = parsed.numChildVars;
+				childVars.push(newVar);
+				continue;
+			}
+
 			matched = line.match(this.isNamedVariable);
 			if (matched) {
 				childVars.push({
@@ -1369,7 +1388,8 @@ export class PerlDebugSession extends LoggingDebugSession {
 			}
 		}
 		this.childVarsMap.set(this.getScopedVarRef(threadId, ref), childVars);
-		return { parsedLines: i + 1, varType: varType, numChildVars: childVars.length };
+		const parsedLines = i < lines.length ? i + 1 : i;
+		return { parsedLines: parsedLines, varType: varType, numChildVars: childVars.length };
 	}
 
 	protected async setVariableRequest(response: DebugProtocol.SetVariableResponse, args: DebugProtocol.SetVariableArguments): Promise<void> {
