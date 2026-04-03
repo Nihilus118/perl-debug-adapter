@@ -1,7 +1,7 @@
 {
   "name": "perl-debug-adapter",
   "displayName": "Perl Debug Adapter",
-  "version": "1.0.13",
+  "version": "2.0.0",
   "publisher": "nihilus118",
   "description": "Debug Adapter for the Perl CLI-Debugger.",
   "author": {
