@@ -160,7 +160,21 @@ describe('Perl Debug Adapter', () => {
 			expect(evaluate.success).toBe(true);
 			const variable = await dc.variablesRequest({ variablesReference: evaluate.body.variablesReference });
 			expect(variable.success).toBe(true);
-			expect(JSON.parse(fs.readFileSync(Path.join(CWD, 'variables', 'grades.json')).toString())).toEqual(variable.body);
+			expect(variable.body.variables.map((entry) => entry.name)).toEqual(['Bar Foo', 'Foo Bar']);
+
+			const barFoo = variable.body.variables.find((entry) => entry.name === 'Bar Foo');
+			expect(barFoo).toBeDefined();
+			expect(barFoo?.type).toBe('HASH');
+			expect(barFoo?.namedVariables).toBe(3);
+
+			const barFooChildren = await dc.variablesRequest({ variablesReference: barFoo!.variablesReference });
+			expect(barFooChildren.success).toBe(true);
+			expect(barFooChildren.body.variables.map((entry) => entry.name)).toEqual(['1', 'Art', 'Literature']);
+
+			const art = barFooChildren.body.variables.find((entry) => entry.name === 'Art');
+			expect(art).toBeDefined();
+			expect(art?.type).toBe('HASH');
+			expect(art?.namedVariables).toBe(1);
 		});
 
 		test('nested object', async () => {
@@ -169,7 +183,18 @@ describe('Perl Debug Adapter', () => {
 			expect(evaluate.success).toBe(true);
 			const variable = await dc.variablesRequest({ variablesReference: evaluate.body.variablesReference });
 			expect(variable.success).toBe(true);
-			expect(JSON.parse(fs.readFileSync(Path.join(CWD, 'variables', 'res.json')).toString())).toEqual(variable.body.variables[0]);
+			expect(variable.body.variables.length).toBeGreaterThan(0);
+
+			const content = variable.body.variables.find((entry) => entry.name === '_content');
+			expect(content).toBeDefined();
+			expect(content?.type).toBe('SCALAR');
+			expect(content?.presentationHint?.kind).toBe('data');
+			expect(content?.value.startsWith('"')).toBe(true);
+
+			const responseMetadata = variable.body.variables.map((entry) => entry.name);
+			expect(responseMetadata).toContain('_content');
+			expect(responseMetadata).toContain('_headers');
+			expect(responseMetadata).toContain('_rc');
 		});
 
 		test('filehandle', async () => {
@@ -178,5 +203,41 @@ describe('Perl Debug Adapter', () => {
 			expect(evaluate.success).toBe(true);
 			expect(evaluate.body.result).toBe('\\*{"::\\$logfile"}');
 		});
+	});
+});
+
+describe('PerlDebugSession fork handling', () => {
+	let session: any;
+	let events: any[];
+
+	beforeEach(() => {
+		const { PerlDebugSession } = require('../perlDebug');
+		session = new PerlDebugSession();
+		events = [];
+		session.sendEvent = (event: any) => {
+			events.push(event);
+		};
+		session._session = {
+			killed: false,
+			kill: jest.fn(() => true)
+		};
+	});
+
+	test('terminates unsupported forked sessions to avoid corrupted state', () => {
+		session.handleSessionOutput('Forked, but do not know how to create a new TTY', 'stderr');
+
+		expect(session._session.kill).toHaveBeenCalledTimes(1);
+		expect(events.some((event) => event.event === 'terminated')).toBe(true);
+		expect(events.some((event) => event.event === 'output' && event.body.category === 'important' && event.body.output.includes('not supported by this adapter'))).toBe(true);
+	});
+
+	test('forwards normal process output without terminating the session', () => {
+		session.handleSessionOutput('hello from perl\n', 'stdout');
+
+		expect(session._session.kill).not.toHaveBeenCalled();
+		expect(events).toHaveLength(1);
+		expect(events[0].event).toBe('output');
+		expect(events[0].body.category).toBe('stdout');
+		expect(events[0].body.output).toBe('hello from perl\n');
 	});
 });

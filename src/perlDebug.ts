@@ -65,6 +65,7 @@ export class PerlDebugSession extends LoggingDebugSession {
 	private sortKeys: boolean = false;
 
 	private deepcopy: boolean = false;
+	private terminatedDueToUnsupportedFork = false;
 
 	constructor() {
 		super('perl-debug.txt');
@@ -104,6 +105,33 @@ export class PerlDebugSession extends LoggingDebugSession {
 		const response = await this.streamCatcher.request(command);
 		logger.log(`Response for command ${command}: ${response.join('\n')}`);
 		return response;
+	}
+
+	private handleSessionOutput(data: string, category: 'stdout' | 'stderr'): void {
+		const output = data.replace(ansiSeq, '');
+		this.logSendEvent(new OutputEvent(output, category));
+
+		if (output.includes('Forked, but do not know how to create a new TTY')) {
+			this.handleUnsupportedFork();
+		}
+	}
+
+	private handleUnsupportedFork(): void {
+		if (this.terminatedDueToUnsupportedFork) {
+			return;
+		}
+
+		this.terminatedDueToUnsupportedFork = true;
+		this.logSendEvent(new OutputEvent(
+			'Forked Perl debugging is not supported by this adapter because perl5db requires a separate TTY for child debuggers. The session has been stopped to avoid corrupted state.',
+			'important'
+		));
+
+		if (this._session && !this._session.killed) {
+			this._session.kill();
+		}
+
+		this.logSendEvent(new TerminatedEvent());
 	}
 
 	/**
@@ -291,6 +319,7 @@ export class PerlDebugSession extends LoggingDebugSession {
 	}
 
 	protected async launchRequest(response: DebugProtocol.LaunchResponse, args: ILaunchRequestArguments): Promise<void> {
+		this.terminatedDueToUnsupportedFork = false;
 
 		// reset breakpointID and clear maps
 		this.currentBreakpointID = 1;
@@ -404,9 +433,11 @@ export class PerlDebugSession extends LoggingDebugSession {
 			return;
 		});
 
-		// send the script output to the debug console
 		this._session.stdout!.on('data', (data) => {
-			this.logSendEvent(new OutputEvent(data.toString().replace(ansiSeq, ''), 'stdout'));
+			this.handleSessionOutput(data.toString(), 'stdout');
+		});
+		this._session.stderr!.on('data', (data) => {
+			this.handleSessionOutput(data.toString(), 'stderr');
 		});
 
 		await this.streamCatcher.launch(
@@ -825,9 +856,9 @@ export class PerlDebugSession extends LoggingDebugSession {
 	}
 
 	// Regexp for parsing the output of Data::Dumper
-	private isNamedVariable = /"?(.*)"?\s=>?\s(undef|".*"|'.*'|-?\d+|\[\]|\{\}|bless\(.*\)|sub\s\{.*\}|\\\*\{".*\"}|\\{1,2}\*.*)[,|;]$/;
+	private isNamedVariable = /"?(.*)"?\s=>?\s(undef|".*"|'.*'|-?\d+|\[\]|\{\}|bless\(.*\)|sub\s\{.*\}|\\\*\{".*\"}|\\{1,2}\*.*)[,|;]?$/;
 	private isIndexedVariable = /^(undef|".*"|'.*'|-?\d+|\[\]|\{\}|bless\(.*\)|sub\s\{.*\})[,|;]?/;
-	private isNestedHash = /"(.*)"\s=>?\s(bless\(\s)?(\[|\{)/;
+	private isNestedHash = /"(.*)"\s=>?\s(?:bless\(\s*)?(\[|\{)\s*$/;
 	private isNestedArray = /^(bless\(\s*)?(\{|\[)$/;
 	private isVarEnd = /^(\}|\]),?(\s?'(.*)'\s\))?[,|;]?/;
 	// Parse output of Data::Dumper
@@ -845,6 +876,25 @@ export class PerlDebugSession extends LoggingDebugSession {
 				varType = `${(matched[1] === '}' ? 'HASH' : 'ARRAY')}${(matched[3] ? ` ${matched[3]}` : '')}`;
 				break;
 			}
+			matched = line.match(this.isNamedVariable);
+			const nestedHash = line.match(this.isNestedHash);
+			if (nestedHash) {
+				const newVar: DebugProtocol.Variable = {
+					name: nestedHash[1],
+					value: '',
+					variablesReference: this.currentVarRef,
+					presentationHint: { kind: 'innerClass' }
+				};
+				this.parentVarsMap.set(this.currentVarRef, newVar);
+				const parsed = this.parseDumper(lines.slice(i + 1));
+				i += parsed.parsedLines;
+				newVar.value = parsed.varType;
+				newVar.type = parsed.varType;
+				newVar.namedVariables = parsed.numChildVars;
+				childVars.push(newVar);
+				continue;
+			}
+
 			matched = line.match(this.isNamedVariable);
 			if (matched) {
 				childVars.push({
@@ -893,28 +943,19 @@ export class PerlDebugSession extends LoggingDebugSession {
 				}
 				continue;
 			}
-			matched = line.match(this.isNestedHash);
-			if (matched) {
-				const newVar: DebugProtocol.Variable = {
-					name: matched[1],
-					value: '',
-					variablesReference: this.currentVarRef,
-					presentationHint: { kind: 'innerClass' }
-				};
-				this.parentVarsMap.set(this.currentVarRef, newVar);
-				const parsed = this.parseDumper(lines.slice(i + 1));
-				i += parsed.parsedLines;
-				newVar.value = parsed.varType;
-				newVar.type = parsed.varType;
-				newVar.namedVariables = parsed.numChildVars;
-				childVars.push(newVar);
-				continue;
+			if (line.trim() !== '') {
+				childVars.push({
+					name: `${childVars.length}`,
+					value: line.trim(),
+					variablesReference: 0,
+					presentationHint: { kind: 'data' },
+					type: 'SCALAR'
+				});
 			}
-			logger.error(`Unrecognized Data::Dumper line: ${line}`);
-			logger.log(`All lines in current variable scope: ${lines.join('\n')}`);
 		}
 		this.childVarsMap.set(ref, childVars);
-		return { parsedLines: i + 1, varType: varType, numChildVars: childVars.length };
+		const parsedLines = i < lines.length ? i + 1 : i;
+		return { parsedLines: parsedLines, varType: varType, numChildVars: childVars.length };
 	}
 
 	protected async setVariableRequest(response: DebugProtocol.SetVariableResponse, args: DebugProtocol.SetVariableArguments): Promise<void> {
