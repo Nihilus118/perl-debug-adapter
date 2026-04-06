@@ -13,7 +13,37 @@ It should work out of the box on Linux, Windows and Mac using VS Code. It also w
 * The PadWalker module needs to be available in your environment.
 * **OPTIONAL** I recommend using this extension together with BSCANs [Perl Navigator](https://marketplace.visualstudio.com/items?itemName=bscan.perlnavigator) as it provides great language server features out of the box.
 
-Forked Perl debugging is currently not supported by this adapter. When `perl5db` reports that it cannot create a new TTY for a forked child, the session is terminated to avoid corrupted debugger state.
+Forked Perl debugging requires the `socket` transport. The adapter now defaults to `socket` so `perl5db` can attach child debugger runtimes over TCP loopback.
+
+When explicitly using `stdio`, forked Perl debugging is still unsupported by `perl5db` (it requires a separate TTY for child debuggers). In that mode, if `perl5db` reports that it cannot create a new TTY, the session is terminated to avoid corrupted debugger state.
+
+#### launch.json examples
+
+Recommended (default): `socket` transport
+
+```json
+{
+  "type": "perl",
+  "request": "launch",
+  "name": "Perl Debug",
+  "program": "${workspaceFolder}/${relativeFile}",
+  "stopOnEntry": true,
+  "transport": "socket"
+}
+```
+
+Legacy/fallback: `stdio` transport
+
+```json
+{
+  "type": "perl",
+  "request": "launch",
+  "name": "Perl Debug (stdio)",
+  "program": "${workspaceFolder}/${relativeFile}",
+  "stopOnEntry": true,
+  "transport": "stdio"
+}
+```
 
 ### Other Editors and IDEs
 

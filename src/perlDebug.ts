@@ -94,6 +94,8 @@ export class PerlDebugSession extends LoggingDebugSession {
 	private debuggerSocket?: Net.Socket;
 	private nextChildThreadId = 2;
 	private executionInProgressThreads = new Set<number>();
+	private forcedTopFrameByThread = new Map<number, { path: string; line: number }>();
+	private activeTransport: 'stdio' | 'socket' = 'stdio';
 
 	constructor() {
 		super('perl-debug.txt');
@@ -160,23 +162,57 @@ export class PerlDebugSession extends LoggingDebugSession {
 		return copy;
 	}
 
+	private normalizePathKey(filePath: string): string {
+		return this.normalizePathAndCasing(filePath);
+	}
+
+	private getPathMappedBreakpoints(
+		map: Map<string, IBreakpointData[]>,
+		scriptPath: string
+	): IBreakpointData[] | undefined {
+		const normalizedPath = this.normalizePathKey(scriptPath);
+		const direct = map.get(normalizedPath);
+		if (direct) {
+			return direct;
+		}
+
+		if (process.platform === 'win32') {
+			const lower = normalizedPath.toLowerCase();
+			const entries = Array.from(map.entries());
+			for (let i = 0; i < entries.length; i++) {
+				const [existingPath, bps] = entries[i];
+				if (this.normalizePathKey(existingPath).toLowerCase() === lower) {
+					return bps;
+				}
+			}
+		}
+
+		return undefined;
+	}
+
+	private samePath(left?: string, right?: string): boolean {
+		if (!left || !right) {
+			return false;
+		}
+		return this.normalizePathKey(left) === this.normalizePathKey(right);
+	}
+
 	private setDesiredBreakpoints(scriptPath: string, bps: IBreakpointData[]): void {
-		const normalizedPath = this.normalizePathAndCasing(scriptPath);
+		const normalizedPath = this.normalizePathKey(scriptPath);
 		this.desiredBreakpointsMap.set(normalizedPath, this.cloneBreakpoints(bps));
 	}
 
 	private getDesiredBreakpoints(scriptPath: string): IBreakpointData[] {
-		const normalizedPath = this.normalizePathAndCasing(scriptPath);
-		return this.cloneBreakpoints(this.desiredBreakpointsMap.get(normalizedPath) || []);
+		return this.cloneBreakpoints(this.getPathMappedBreakpoints(this.desiredBreakpointsMap, scriptPath) || []);
 	}
 
 	private setDesiredPostponedBreakpoints(scriptPath: string, bps: IBreakpointData[]): void {
-		const normalizedPath = this.normalizePathAndCasing(scriptPath);
+		const normalizedPath = this.normalizePathKey(scriptPath);
 		this.desiredPostponedBreakpointsMap.set(normalizedPath, this.cloneBreakpoints(bps));
 	}
 
 	private deleteDesiredPostponedBreakpoints(scriptPath: string): void {
-		const normalizedPath = this.normalizePathAndCasing(scriptPath);
+		const normalizedPath = this.normalizePathKey(scriptPath);
 		this.desiredPostponedBreakpointsMap.delete(normalizedPath);
 	}
 
@@ -278,7 +314,7 @@ export class PerlDebugSession extends LoggingDebugSession {
 				`Attached forked perl5db child transport to thread ${threadId}.\n`,
 				'important'
 			));
-			// Child is sitting at DB<n> prompt after sync — start it running.
+			// Child is sitting at DB<n> prompt after sync - start it running.
 			// execute('c') will resolve when the child next stops (breakpoint/step/exit).
 			// Track in executionInProgressThreads to block duplicate continues until the
 			// first StoppedEvent is emitted.
@@ -329,7 +365,7 @@ export class PerlDebugSession extends LoggingDebugSession {
 		const output = data.replace(ansiSeq, '');
 		this.logSendEvent(new OutputEvent(output, category));
 
-		if (output.includes('Forked, but do not know how to create a new TTY')) {
+		if (this.activeTransport === 'stdio' && output.includes('Forked, but do not know how to create a new TTY')) {
 			this.handleUnsupportedFork();
 		}
 	}
@@ -352,6 +388,7 @@ export class PerlDebugSession extends LoggingDebugSession {
 		this.logSendEvent(new TerminatedEvent());
 	}
 	private cleanupDebuggerTransport(): void {
+		this.activeTransport = 'stdio';
 		this.frameThreadMap.clear();
 		this.variableThreadMap.clear();
 		this.threadVarRef.clear();
@@ -441,15 +478,17 @@ export class PerlDebugSession extends LoggingDebugSession {
 	/**
 	 * This function normalizes paths depending on the OS the debugger is running on.
 	 */
-	private normalizePathAndCasing(path: string): string {
+	private normalizePathAndCasing(pathStr: string): string {
 		if (process.platform === 'win32') {
-			const matched = path.match(/(^[a-z])(:\\.*)/);
+			pathStr = pathStr.replace(/\//g, '\\');
+			pathStr = path.win32.normalize(pathStr);
+			const matched = pathStr.match(/(^[a-z])(:[\\/].*)/);
 			if (matched) {
-				path = `${matched[1].toUpperCase()}${matched[2]}`;
+				pathStr = `${matched[1].toUpperCase()}${matched[2]}`;
 			}
-			return path.replace(/\//g, '\\');
+			return pathStr;
 		}
-		return path.replace(/\\/g, '/');
+		return path.posix.normalize(pathStr.replace(/\\/g, '/'));
 	}
 
 	/**
@@ -467,7 +506,11 @@ export class PerlDebugSession extends LoggingDebugSession {
 		for (let i = 0; i < candidates.length; i++) {
 			const candidate = candidates[i];
 			const data = (await this.request(`f ${candidate}`, threadId))[1];
-			if (!data.match(/^No file matching '.*' is loaded./)) {
+			const noFileMatch = data.match(/^No file matching '.*' is loaded\./);
+			// perl5db can emit hard errors for Windows-style absolute paths (e.g.
+			// "\\C no longer supported in regex") which must be treated as failure.
+			const hasError = /no longer supported in regex|\sat\s.*perl5db\.pl\sline\s\d+\.?|END failed--call queue aborted\./i.test(data);
+			if (!noFileMatch && !hasError) {
 				logger.log(`Successfully changed file context to ${candidate}: ${data}`);
 				return candidate;
 			}
@@ -514,7 +557,7 @@ export class PerlDebugSession extends LoggingDebugSession {
 		}
 
 		// save breakpoints inside the map
-		const normalizedPath = this.normalizePathAndCasing(filePath);
+		const normalizedPath = this.normalizePathKey(filePath);
 		this.setDesiredBreakpoints(normalizedPath, mapBps);
 		this.getRuntimeBreakpoints(threadId).set(normalizedPath, this.cloneBreakpoints(mapBps));
 		// clear postponed breakpoints for this runtime
@@ -528,10 +571,10 @@ export class PerlDebugSession extends LoggingDebugSession {
 	 * Removes all breakpoints in a given perl file.
 	 */
 	private async removeBreakpointsInFile(filePath: string, threadId: number = PerlDebugSession.threadId) {
-		const scriptPath = this.normalizePathAndCasing(filePath);
+		const scriptPath = this.normalizePathKey(filePath);
 		const runtimeBps = this.getRuntimeBreakpoints(threadId);
 
-		const bps = runtimeBps.get(scriptPath);
+		const bps = this.getPathMappedBreakpoints(runtimeBps, scriptPath);
 		if (bps && (await this.changeFileContext(scriptPath, threadId))) {
 			for (let i = 0; i < bps.length; i++) {
 				// remove the breakpoint inside the debugger
@@ -543,23 +586,28 @@ export class PerlDebugSession extends LoggingDebugSession {
 	}
 
 	private async applyBreakpointsToRuntime(scriptPath: string, bps: IBreakpointData[], threadId: number): Promise<void> {
+		const normalizedPath = this.normalizePathKey(scriptPath);
 		if (!(await this.changeFileContext(scriptPath, threadId))) {
-			this.getRuntimePostponedBreakpoints(threadId).set(scriptPath, this.cloneBreakpoints(bps));
+			this.getRuntimePostponedBreakpoints(threadId).set(normalizedPath, this.cloneBreakpoints(bps));
 			return;
 		}
 		await this.removeBreakpointsInFile(scriptPath, threadId);
 		for (let i = 0; i < bps.length; i++) {
 			await this.request(`b ${bps[i].line} ${bps[i].condition}`, threadId);
 		}
-		this.getRuntimeBreakpoints(threadId).set(scriptPath, this.cloneBreakpoints(bps));
-		this.getRuntimePostponedBreakpoints(threadId).delete(scriptPath);
+		this.getRuntimeBreakpoints(threadId).set(normalizedPath, this.cloneBreakpoints(bps));
+		this.getRuntimePostponedBreakpoints(threadId).delete(normalizedPath);
 	}
 
 	/**
 	 * Checks if the perl5db-runtime is currently active.
+	 * Requires the primary runtime to be registered: streamCatcher.launch() sets
+	 * this.streamCatcher.input on its very first line, before awaiting perl's first
+	 * prompt, so isActive() would return true during the startup window when runtimes
+	 * is still empty. Requiring runtimes.has(threadId) closes that window.
 	 */
 	private isActive(): boolean {
-		return !!(typeof this.streamCatcher.input !== 'undefined' && this.streamCatcher.input);
+		return !!(this.runtimes.has(PerlDebugSession.threadId) && this.streamCatcher.input);
 	}
 
 	/**
@@ -661,7 +709,10 @@ export class PerlDebugSession extends LoggingDebugSession {
 
 		// reset breakpointID and clear maps
 		this.currentBreakpointID = 1;
-		this.desiredPostponedBreakpointsMap.clear();
+		// desiredPostponedBreakpointsMap is intentionally NOT cleared here: the IDE sends
+		// setBreakpoints during the configuration sequence (after InitializedEvent but before
+		// launch), and those breakpoints must survive into the launch body where they are
+		// applied to the freshly-started runtime.
 		this.desiredBreakpointsMap.clear();
 
 		// set cwd
@@ -690,7 +741,8 @@ export class PerlDebugSession extends LoggingDebugSession {
 		// start the program in the runtime
 		// Spawn perl process and handle errors
 		logger.log(`CWD: ${args.cwd}`);
-		const transport = args.transport || 'stdio';
+		const transport = args.transport || 'socket';
+		this.activeTransport = transport;
 		let remotePort: string | undefined;
 		let socketPromise: Promise<Net.Socket> | undefined;
 		if (transport === 'socket') {
@@ -831,6 +883,9 @@ export class PerlDebugSession extends LoggingDebugSession {
 			// do not print return values on return-command
 			await this.request('o PrintRet=0');
 
+			// avoid stopping in END-frame internals when the debugged script exits
+			await this.request('o inhibit_exit=1');
+
 			// disable buffering to STDOUT
 			await this.request('$| = 1');
 
@@ -845,8 +900,15 @@ export class PerlDebugSession extends LoggingDebugSession {
 				return;
 			}
 
-			// set as many breakpoints as early as possible
+			// Apply pre-launch breakpoints for the main script only. At this point only
+			// the main script is guaranteed to be loaded in perl5db; breakpoints for other
+			// files remain in desiredPostponedBreakpointsMap and are applied when those
+			// files are loaded via the DB::postponed hook.
+			const mainScriptKey = this.normalizePathKey(args.program);
 			for (const [scriptPath, bps] of this.getDesiredPostponedEntries()) {
+				if (!this.samePath(scriptPath, mainScriptKey)) {
+					continue;
+				}
 				const fileChanged = await this.changeFileContext(scriptPath, PerlDebugSession.threadId);
 				if (bps && fileChanged) {
 					await this.setBreakpointsInFile(scriptPath, bps, PerlDebugSession.threadId);
@@ -890,7 +952,17 @@ export class PerlDebugSession extends LoggingDebugSession {
 		this.currentBreakpointID = 1;
 
 		// setting breakpoints is only possible if the runtime is currently active and the script is already loaded
-		if (this.isActive() && await this.changeFileContext(scriptPath, PerlDebugSession.threadId)) {
+		const active = this.isActive();
+		const currentFrames = active ? await this.getStackFrames(PerlDebugSession.threadId) : [];
+		const currentPath = currentFrames[0]?.source?.path;
+		const currentMatchesTarget = this.samePath(currentPath, scriptPath);
+		let loadedNow = false;
+		if (active && currentMatchesTarget) {
+			const activeContextPath = await this.changeFileContext(scriptPath, PerlDebugSession.threadId);
+			const expectedBase = basename(scriptPath).toLowerCase();
+			loadedNow = !!activeContextPath && basename(activeContextPath).toLowerCase() === expectedBase;
+		}
+		if (active && loadedNow) {
 			// first we clear all existing breakpoints inside the file on primary runtime
 			await this.removeBreakpointsInFile(scriptPath, PerlDebugSession.threadId);
 			// now we try to set every breakpoint requested on primary runtime
@@ -919,9 +991,10 @@ export class PerlDebugSession extends LoggingDebugSession {
 				bps.push(new Breakpoint(true, bp.line, undefined, new Source(scriptPath, scriptPath)));
 
 				this.currentBreakpointID++;
+
 			});
 			this.setDesiredPostponedBreakpoints(scriptPath, mapBps);
-			const normalizedPath = this.normalizePathAndCasing(scriptPath);
+			const normalizedPath = this.normalizePathKey(scriptPath);
 			const runtimes = Array.from(this.runtimes.values());
 			for (let i = 0; i < runtimes.length; i++) {
 				this.getRuntimePostponedBreakpoints(runtimes[i].threadId).set(normalizedPath, this.cloneBreakpoints(mapBps));
@@ -1002,13 +1075,49 @@ export class PerlDebugSession extends LoggingDebugSession {
 			}
 		}
 
+		const normalizedCwd = this.normalizePathKey(this.cwd);
+		const workspaceFrames = stackFrames.filter((frame) => {
+			const framePath = frame.source?.path;
+			return !!framePath && this.normalizePathKey(framePath).startsWith(normalizedCwd);
+		});
+		if (workspaceFrames.length > 0) {
+			const nonWorkspaceFrames = stackFrames.filter((frame) => {
+				const framePath = frame.source?.path;
+				return !(!!framePath && this.normalizePathKey(framePath).startsWith(normalizedCwd));
+			});
+			stackFrames = workspaceFrames.concat(nonWorkspaceFrames);
+		}
+
 		return stackFrames;
 	}
+
+	private createSyntheticFrame(threadId: number, name: string, filePath: string, line: number): StackFrame {
+		const frameId = this.frameIdSeed++;
+		this.frameThreadMap.set(frameId, threadId);
+		const source = new Source(basename(filePath), filePath);
+		return new StackFrame(frameId, name, source, line);
+	}
+
+	private prependForcedStackFrame(threadId: number, stackFrames: StackFrame[]): StackFrame[] {
+		const forcedTopFrame = this.forcedTopFrameByThread.get(threadId);
+		if (!forcedTopFrame) {
+			return stackFrames;
+		}
+		const forced = this.createSyntheticFrame(threadId, 'main::loaded_source', forcedTopFrame.path, forcedTopFrame.line);
+		return [forced].concat(stackFrames);
+	}
+
 
 	protected async stackTraceRequest(response: DebugProtocol.StackTraceResponse, args: DebugProtocol.StackTraceArguments): Promise<void> {
 		const threadId = args.threadId || PerlDebugSession.threadId;
 		this.currentStoppedThreadId = threadId;
-		const stackFrames = await this.getStackFrames(threadId);
+		let stackFrames = await this.getStackFrames(threadId);
+		// prependForcedStackFrame handles the genuine "file just loaded, here is the breakpoint
+		// location" case (forcedTopFrameByThread set by execute handler). The former
+		// prependPostponedFallbackFrame was removed: it fired incorrectly whenever there were
+		// pre-launch pending breakpoints in runtimePostponedBreakpointsMap, masking the real
+		// entry-stop or breakpoint-stop location.
+		stackFrames = this.prependForcedStackFrame(threadId, stackFrames);
 
 		response.body = {
 			stackFrames: stackFrames,
@@ -1212,7 +1321,7 @@ export class PerlDebugSession extends LoggingDebugSession {
 					} else {
 						const ref = this.consumeVarRef(threadId);
 						this.variableThreadMap.set(ref, threadId);
-						this.parseDumper(varDump.slice(1, -1), threadId);
+						this.parseDumper(varDump.slice(1, -1), threadId, ref);
 						const matched = varDump[varDump.length - 1].trim().match(this.isVarEnd);
 						if (matched) {
 							const type = `${(matched[1] === '}' ? 'HASH' : 'ARRAY')}${(matched[3] ? ` ${matched[3]}` : '')}`;
@@ -1270,45 +1379,26 @@ export class PerlDebugSession extends LoggingDebugSession {
 	// Regexp for parsing the output of Data::Dumper
 	private isNamedVariable = /"?(.*)"?\s=>?\s(undef|".*"|'.*'|-?\d+|\[\]|\{\}|bless\(.*\)|sub\s\{.*\}|\\\*\{".*\"}|\\{1,2}\*.*)[,|;]?$/;
 	private isIndexedVariable = /^(undef|".*"|'.*'|-?\d+|\[\]|\{\}|bless\(.*\)|sub\s\{.*\})[,|;]?/;
-	private isNestedHash = /"(.*)"\s=>?\s(?:bless\(\s*)?(\[|\{)\s*$/;
+	private isNestedHash = /^(.*?)\s=>?\s(?:bless\(\s*)?(\[|\{)\s*$/;
 	private isNestedArray = /^(bless\(\s*)?(\{|\[)$/;
 	private isVarEnd = /^(\}|\]),?(\s?'(.*)'\s\))?[,|;]?/;
 	// Parse output of Data::Dumper
-	private parseDumper(lines: string[], threadId: number = PerlDebugSession.threadId): { parsedLines: number, varType: string, numChildVars: number; } {
+	private parseDumper(lines: string[], threadId: number = PerlDebugSession.threadId, refOverride?: number): { parsedLines: number, varType: string, numChildVars: number; } {
 		let childVars: DebugProtocol.Variable[] = [];
 		let varType: string = '';
-		const ref: number = this.consumeVarRef(threadId);
+		const ref: number = typeof refOverride === 'number' ? refOverride : this.consumeVarRef(threadId);
 
 		let i: number;
 		for (i = 0; i < lines.length; i++) {
 			const line = lines[i];
-			let matched = line.match(this.isVarEnd);
+			const trimmedLine = line.trim();
+			let matched = trimmedLine.match(this.isVarEnd);
 			if (matched) {
 				varType = `${(matched[1] === '}' ? 'HASH' : 'ARRAY')}${(matched[3] ? ` ${matched[3]}` : '')}`;
 				break;
 			}
-			matched = line.match(this.isNamedVariable);
-			const nestedHash = line.match(this.isNestedHash);
-			if (nestedHash) {
-				const childRef = this.peekVarRef(threadId);
-				const newVar: DebugProtocol.Variable = {
-					name: nestedHash[1],
-					value: '',
-					variablesReference: childRef,
-					presentationHint: { kind: 'innerClass' }
-				};
-				this.parentVarsMap.set(this.getScopedVarRef(threadId, childRef), newVar);
-				this.variableThreadMap.set(childRef, threadId);
-				const parsed = this.parseDumper(lines.slice(i + 1), threadId);
-				i += parsed.parsedLines;
-				newVar.value = parsed.varType;
-				newVar.type = parsed.varType;
-				newVar.namedVariables = parsed.numChildVars;
-				childVars.push(newVar);
-				continue;
-			}
 
-			matched = line.match(this.isNamedVariable);
+			matched = trimmedLine.match(this.isNamedVariable);
 			if (matched) {
 				childVars.push({
 					name: matched[1].replace(/"/, ''),
@@ -1322,7 +1412,27 @@ export class PerlDebugSession extends LoggingDebugSession {
 				}
 				continue;
 			}
-			matched = line.match(this.isIndexedVariable);
+			matched = trimmedLine.match(this.isNestedHash);
+			if (matched) {
+				const childRef = this.consumeVarRef(threadId);
+				const keyName = (matched[1] || '').replace(/^['"]|['"]$/g, '');
+				const newVar: DebugProtocol.Variable = {
+					name: keyName,
+					value: '',
+					variablesReference: childRef,
+					presentationHint: { kind: 'innerClass' }
+				};
+				this.parentVarsMap.set(this.getScopedVarRef(threadId, childRef), newVar);
+				this.variableThreadMap.set(childRef, threadId);
+				const parsed = this.parseDumper(lines.slice(i + 1), threadId, childRef);
+				i += parsed.parsedLines;
+				newVar.value = parsed.varType;
+				newVar.type = parsed.varType;
+				newVar.namedVariables = parsed.numChildVars;
+				childVars.push(newVar);
+				continue;
+			}
+			matched = trimmedLine.match(this.isIndexedVariable);
 			if (matched) {
 				childVars.push({
 					name: `${childVars.length}`,
@@ -1336,9 +1446,9 @@ export class PerlDebugSession extends LoggingDebugSession {
 				}
 				continue;
 			}
-			matched = line.match(this.isNestedArray);
+			matched = trimmedLine.match(this.isNestedArray);
 			if (matched) {
-				const childRef = this.peekVarRef(threadId);
+				const childRef = this.consumeVarRef(threadId);
 				const newVar: DebugProtocol.Variable = {
 					name: `${childVars.length}`,
 					value: '',
@@ -1347,7 +1457,7 @@ export class PerlDebugSession extends LoggingDebugSession {
 				};
 				this.parentVarsMap.set(this.getScopedVarRef(threadId, childRef), newVar);
 				this.variableThreadMap.set(childRef, threadId);
-				const parsed = this.parseDumper(lines.slice(i + 1), threadId);
+				const parsed = this.parseDumper(lines.slice(i + 1), threadId, childRef);
 				i += parsed.parsedLines;
 				newVar.value = parsed.varType;
 				newVar.type = parsed.varType;
@@ -1356,25 +1466,6 @@ export class PerlDebugSession extends LoggingDebugSession {
 				if (childVars.length >= this.maxArrayElements) {
 					break;
 				}
-				continue;
-			}
-			matched = line.match(this.isNestedHash);
-			if (matched) {
-				const childRef = this.peekVarRef(threadId);
-				const newVar: DebugProtocol.Variable = {
-					name: matched[1],
-					value: '',
-					variablesReference: childRef,
-					presentationHint: { kind: 'innerClass' }
-				};
-				this.parentVarsMap.set(this.getScopedVarRef(threadId, childRef), newVar);
-				this.variableThreadMap.set(childRef, threadId);
-				const parsed = this.parseDumper(lines.slice(i + 1), threadId);
-				i += parsed.parsedLines;
-				newVar.value = parsed.varType;
-				newVar.type = parsed.varType;
-				newVar.namedVariables = parsed.numChildVars;
-				childVars.push(newVar);
 				continue;
 			}
 			if (line.trim() !== '') {
@@ -1433,6 +1524,7 @@ export class PerlDebugSession extends LoggingDebugSession {
 
 	private async execute(cmd: string, threadId: number = PerlDebugSession.threadId): Promise<void> {
 		const lines = await this.request(cmd, threadId);
+		this.forcedTopFrameByThread.delete(threadId);
 		const index = lines.findIndex(e => { return e.match(/^main::.*|^Debugged program terminated.*|^(continue\s)?loaded source.*/); });
 		const scriptOutput = lines.slice(1, index);
 		if (scriptOutput.filter(e => { return e !== ''; }).length > 0) {
@@ -1458,6 +1550,9 @@ export class PerlDebugSession extends LoggingDebugSession {
 		// the reason why the debugger paused the execution
 		let reason: string;
 		const newSource = lines.find(ln => { return ln.match(/loaded source/); });
+		let loadedSourceHasPostponedBreakpoints = false;
+		let loadedSourcePathForStop: string | undefined;
+		let loadedSourcePreferredLine: number | undefined;
 		if (newSource) {
 			// set breakpoints in newly loaded file
 			const matched = newSource.match(/loaded source (.*)/);
@@ -1466,15 +1561,34 @@ export class PerlDebugSession extends LoggingDebugSession {
 				if (scriptPath.match(/^\./)) {
 					scriptPath = join(this.cwd, scriptPath);
 				}
-				scriptPath = this.normalizePathAndCasing(scriptPath);
-				const bps = this.getRuntimePostponedBreakpoints(threadId).get(scriptPath);
+				scriptPath = this.normalizePathKey(scriptPath);
+				const bps = this.getPathMappedBreakpoints(this.getRuntimePostponedBreakpoints(threadId), scriptPath);
+				loadedSourceHasPostponedBreakpoints = !!(bps && bps.length > 0);
+				loadedSourcePathForStop = scriptPath;
+				if (bps && bps.length > 0) {
+					loadedSourcePreferredLine = bps[0].line;
+				}
 				if (bps) {
-					await this.setBreakpointsInFile(scriptPath, bps, threadId);
+					const fileChanged = await this.changeFileContext(scriptPath, threadId);
+					if (!fileChanged) {
+						reason = 'new source';
+						this.currentStoppedThreadId = threadId;
+						this.logSendEvent(new StoppedEvent(reason, threadId));
+						return;
+					}
+					const appliedBreakpoints = await this.setBreakpointsInFile(scriptPath, bps, threadId);
+					const hasUnresolved = appliedBreakpoints.some((bp) => !bp.verified);
+					if (hasUnresolved) {
+						this.currentStoppedThreadId = threadId;
+						this.logSendEvent(new StoppedEvent('breakpoint', threadId));
+						return;
+					}
 					// check if we already reached a breakpoint at current position
 					// this can happen if the breakpoint is located at the first breakable line inside a file
 					const currentLine = (await this.getStackFrames(threadId))[0].line;
-					for (let i = 0; i < bps.length; i++) {
-						const bp = bps[i];
+					const runtimeBps = this.getPathMappedBreakpoints(this.getRuntimeBreakpoints(threadId), scriptPath) || bps;
+					for (let i = 0; i < runtimeBps.length; i++) {
+						const bp = runtimeBps[i];
 						if (bp.line === currentLine) {
 							this.logSendEvent(new StoppedEvent('breakpoint', threadId));
 							return;
@@ -1482,8 +1596,17 @@ export class PerlDebugSession extends LoggingDebugSession {
 					}
 				}
 			}
-			if (newSource.startsWith('continue') && (cmd === 'n' || cmd === 'c')) {
-				// just continue if the current command is continue or step over and the debugger allows it
+			if (cmd === 'c' && loadedSourceHasPostponedBreakpoints) {
+				await this.request('sleep(.05)', threadId);
+				if (loadedSourcePathForStop && loadedSourcePreferredLine) {
+					this.forcedTopFrameByThread.set(threadId, {
+						path: loadedSourcePathForStop,
+						line: loadedSourcePreferredLine
+					});
+				}
+				reason = 'breakpoint';
+			} else if (newSource.startsWith('continue') && (cmd === 'n' || cmd === 'c')) {
+				// Keep running for step-over or continue without postponed breakpoints.
 				await this.continue(threadId);
 				return;
 			} else {
@@ -1491,24 +1614,40 @@ export class PerlDebugSession extends LoggingDebugSession {
 				reason = 'new source';
 			}
 		} else {
-			if (cmd === 'c') {
-				// perl5db can occasionally pause after source loading even though no line
-				// breakpoint is configured at the current location. In that case we should
-				// continue automatically instead of surfacing a fake breakpoint stop.
-				if (this.funcBps.length === 0) {
-					const stackFrames = await this.getStackFrames(threadId);
-					const currentFrame = stackFrames[0];
-					const currentPath = currentFrame?.source?.path;
-					if (currentFrame && currentPath) {
-						const normalizedPath = this.normalizePathAndCasing(currentPath);
-						const runtimeBps = this.getRuntimeBreakpoints(threadId).get(normalizedPath) || [];
-						const isRealLineBreakpoint = runtimeBps.some((bp) => bp.line === currentFrame.line);
-						if (!isRealLineBreakpoint) {
-							await this.continue(threadId);
-							return;
-						}
+			const stoppedLocation = lines.find((line) => line.match(/^main::\((.*):(\d+)\):/));
+			const matchedLocation = stoppedLocation?.match(/^main::\((.*):(\d+)\):/);
+			if (matchedLocation) {
+				let stoppedPath = matchedLocation[1];
+				const isRelativeStoppedPath = stoppedPath.match(/^\./) !== null;
+				if (isRelativeStoppedPath) {
+					stoppedPath = join(this.cwd, stoppedPath);
+				}
+
+				const normalizedStoppedPath = this.normalizePathKey(stoppedPath);
+				const normalizedCwd = this.normalizePathKey(this.cwd);
+				const inWorkspace = normalizedStoppedPath.startsWith(normalizedCwd);
+
+				if (!inWorkspace) {
+					if (cmd === 'n') {
+						await this.next(threadId);
+					} else if (cmd === 'c') {
+						await this.continue(threadId);
+					}
+					return;
+				}
+
+				if (cmd === 'c' && this.funcBps.length === 0 && isRelativeStoppedPath) {
+					const stoppedLine = +matchedLocation[2];
+					const runtimeBps = this.getPathMappedBreakpoints(this.getRuntimeBreakpoints(threadId), normalizedStoppedPath) || [];
+					const isRealLineBreakpoint = runtimeBps.some((bp) => bp.line === stoppedLine);
+					if (!isRealLineBreakpoint) {
+						await this.continue(threadId);
+						return;
 					}
 				}
+			}
+
+			if (cmd === 'c') {
 				reason = 'breakpoint';
 			} else {
 				reason = 'step';

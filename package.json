@@ -221,8 +221,8 @@
                   "stdio",
                   "socket"
                 ],
-                "description": "Debugger transport for perl5db. `socket` is experimental and currently supports only the primary debugger session.",
-                "default": "stdio"
+                "description": "Debugger transport for perl5db. `socket` supports forked child runtimes and is the recommended default.",
+                "default": "socket"
               }
             }
           }

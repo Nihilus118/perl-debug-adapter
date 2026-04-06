@@ -1,3 +1,13 @@
+## 2.0.0
+* Add socket transport support for perl5db and child fork runtimes
+* Make socket transport the default debugger transport
+* Keep stdio transport available as an explicit launch option
+* Restrict unsupported fork-session termination guard to stdio transport
+* Improve startup breakpoint handling for breakpoints selected before launch
+* Improve multi-file prelaunch breakpoint behavior by deferring non-main-script breakpoints until source load
+* Improve Windows path error handling when changing file context in perl5db
+* Add regression tests for prelaunch breakpoints, stop-on-entry ordering, transport behavior, and perl5db path-error handling
+
 ## 1.0.0
 * Step in, step out, step over, restart, terminate
 * Set breakpoints in any script or module

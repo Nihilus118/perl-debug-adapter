@@ -18,16 +18,22 @@ describe('Perl Debug Adapter', () => {
 
 	beforeEach(async () => {
 		await dc.start();
-		// launch test script
-		await dc.launch({
-			type: 'perl',
-			request: 'launch',
-			name: 'Perl Debug',
-			program: PERL_SCRIPT,
-			stopOnEntry: true,
-			cwd: CWD,
-			sortKeys: true,
-		});
+		// launch test script; also await the StoppedEvent('entry') so that the
+		// event is fully drained from dc before the test body registers any
+		// new waitForEvent('stopped') listeners.
+		await Promise.all([
+			dc.waitForEvent('stopped'),
+			dc.launch({
+				type: 'perl',
+				request: 'launch',
+				name: 'Perl Debug',
+				program: PERL_SCRIPT,
+				stopOnEntry: true,
+				cwd: CWD,
+				transport: 'stdio',
+				sortKeys: true,
+			}),
+		]);
 	});
 
 	afterEach(async () => {
@@ -82,10 +88,199 @@ describe('Perl Debug Adapter', () => {
 		test('stop on postponed breakpoint', async () => {
 			const setBps = await dc.setBreakpointsRequest({ source: { path: INCLUDED_PERL_SCRIPT }, breakpoints: [{ line: 5 }] });
 			expect(setBps.success).toBe(true);
+			// Register the listener BEFORE continuing. Because beforeEach already
+			// drained the entry stop, this will only catch the NEXT stopped event
+			// (the forced stop that fires when dbconfig.pl is loaded and the
+			// breakpoint at line 5 is applied).
+			const stoppedPromise = dc.waitForEvent('stopped');
 			const cont = await dc.continueRequest({ threadId: 1 });
 			expect(cont.success).toBe(true);
+			await stoppedPromise;
+			const trace = await dc.stackTraceRequest({ threadId: 1 });
+			expect(trace.success).toBe(true);
+			expect(trace.body.stackFrames[0].source!.path).toBe(INCLUDED_PERL_SCRIPT);
+			expect(trace.body.stackFrames[0].line).toBe(5);
+		});
+
+		test('stop on entry is not broken by pre-launch breakpoints for other files', async () => {
+			// Regression: applying pre-launch breakpoints for non-main-script files
+			// triggered a perl5db regex crash on Windows paths, killing the process
+			// before StoppedEvent('entry') was ever sent.
+			await dc.terminateRequest();
+			await dc.stop();
+			await dc.start();
+
+			await dc.initializeRequest();
+
+			// IDE sends breakpoints for multiple files during the config phase
+			await dc.setBreakpointsRequest({ source: { path: PERL_SCRIPT }, breakpoints: [{ line: 10 }] });
+			await dc.setBreakpointsRequest({ source: { path: INCLUDED_PERL_SCRIPT }, breakpoints: [{ line: 5 }] });
+
+			const stoppedPromise = dc.waitForEvent('stopped');
+
+			await dc.launchRequest({
+				type: 'perl',
+				request: 'launch',
+				name: 'Perl Debug',
+				program: PERL_SCRIPT,
+				stopOnEntry: true,
+				cwd: CWD,
+				transport: 'stdio',
+				sortKeys: true,
+			} as any);
+
+			const stoppedEvent = await stoppedPromise;
+			expect(stoppedEvent.body.reason).toBe('entry');
+
+			const trace = await dc.stackTraceRequest({ threadId: 1 });
+			expect(trace.success).toBe(true);
+			expect(trace.body.stackFrames[0].source!.path).toBe(PERL_SCRIPT);
+			expect(trace.body.stackFrames[0].line).toBe(7);
+		});
+
+		test('breakpoints set before session launch are hit', async () => {
+			// Simulate the IDE behaviour: breakpoints already selected before F5 is pressed.
+			// The IDE sends setBreakpoints during the configuration sequence (after InitializedEvent
+			// but before launch), so the adapter must not discard them when launchRequest runs.
+			await dc.terminateRequest();
+			await dc.stop();
+			await dc.start();
+
+			// Trigger InitializedEvent by sending the initialize request
+			await dc.initializeRequest();
+
+			// Set a breakpoint on line 10 BEFORE the launch request is sent
+			await dc.setBreakpointsRequest({ source: { path: PERL_SCRIPT }, breakpoints: [{ line: 10 }] });
+
+			// Register the stopped listener before launching so the event is not missed
+			const stoppedPromise = dc.waitForEvent('stopped');
+
+			// Launch without stopOnEntry ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Å“ the only reason to stop should be the pre-set breakpoint
+			await dc.launchRequest({
+				type: 'perl',
+				request: 'launch',
+				name: 'Perl Debug',
+				program: PERL_SCRIPT,
+				stopOnEntry: false,
+				cwd: CWD,
+				transport: 'stdio',
+				sortKeys: true,
+			} as any);
+
+			await stoppedPromise;
+
+			const trace = await dc.stackTraceRequest({ threadId: 1 });
+			expect(trace.success).toBe(true);
+			expect(trace.body.stackFrames[0].source!.path).toBe(PERL_SCRIPT);
+			expect(trace.body.stackFrames[0].line).toBe(10);
+		});
+
+		test('pre-launch breakpoints in multiple files still stop on entry first', async () => {
+			await dc.terminateRequest();
+			await dc.stop();
+			await dc.start();
+
+			await dc.initializeRequest();
+
+			// Simulate VS Code sending all workspace breakpoints before launch.
+			const mainSet = await dc.setBreakpointsRequest({ source: { path: PERL_SCRIPT }, breakpoints: [{ line: 10 }] });
+			expect(mainSet.success).toBe(true);
+			const includedSet = await dc.setBreakpointsRequest({ source: { path: INCLUDED_PERL_SCRIPT }, breakpoints: [{ line: 5 }] });
+			expect(includedSet.success).toBe(true);
+			const printfSet = await dc.setBreakpointsRequest({ source: { path: Path.join(CWD, 'printf.pl') }, breakpoints: [{ line: 11 }] });
+			expect(printfSet.success).toBe(true);
+
+			const stoppedPromise = dc.waitForEvent('stopped');
+
+			await dc.launchRequest({
+				type: 'perl',
+				request: 'launch',
+				name: 'Perl Debug',
+				program: PERL_SCRIPT,
+				stopOnEntry: true,
+				cwd: CWD,
+				transport: 'stdio',
+				sortKeys: true,
+			} as any);
+
+			const stoppedEvent = await stoppedPromise;
+			expect(stoppedEvent.body.reason).toBe('entry');
+
+			const trace = await dc.stackTraceRequest({ threadId: 1 });
+			expect(trace.success).toBe(true);
+			expect(trace.body.stackFrames[0].source!.path).toBe(PERL_SCRIPT);
+			expect(trace.body.stackFrames[0].line).toBe(7);
+		});
+
+		test('non-main pre-launch breakpoint remains postponed until file is loaded', async () => {
+			await dc.terminateRequest();
+			await dc.stop();
+			await dc.start();
+
+			await dc.initializeRequest();
+
+			const includedSet = await dc.setBreakpointsRequest({ source: { path: INCLUDED_PERL_SCRIPT }, breakpoints: [{ line: 5 }] });
+			expect(includedSet.success).toBe(true);
+
+			const entryStopped = dc.waitForEvent('stopped');
+			await dc.launchRequest({
+				type: 'perl',
+				request: 'launch',
+				name: 'Perl Debug',
+				program: PERL_SCRIPT,
+				stopOnEntry: true,
+				cwd: CWD,
+				transport: 'stdio',
+				sortKeys: true,
+			} as any);
+			await entryStopped;
+
+			// At entry we are still in test.pl, so dbconfig.pl breakpoints must still be postponed.
 			let trace = await dc.stackTraceRequest({ threadId: 1 });
+			expect(trace.success).toBe(true);
+			expect(trace.body.stackFrames[0].source!.path).toBe(PERL_SCRIPT);
+			expect(trace.body.stackFrames[0].line).toBe(7);
+
+			const loadedStop = dc.waitForEvent('stopped');
+			const cont = await dc.continueRequest({ threadId: 1 });
+			expect(cont.success).toBe(true);
+			await loadedStop;
+
 			trace = await dc.stackTraceRequest({ threadId: 1 });
+			expect(trace.success).toBe(true);
+			expect(trace.body.stackFrames[0].source!.path).toBe(INCLUDED_PERL_SCRIPT);
+			expect(trace.body.stackFrames[0].line).toBe(5);
+		});
+
+		test('non-main pre-launch breakpoint is eventually hit after file load', async () => {
+			await dc.terminateRequest();
+			await dc.stop();
+			await dc.start();
+
+			await dc.initializeRequest();
+
+			const includedSet = await dc.setBreakpointsRequest({ source: { path: INCLUDED_PERL_SCRIPT }, breakpoints: [{ line: 5 }] });
+			expect(includedSet.success).toBe(true);
+
+			const entryStopped = dc.waitForEvent('stopped');
+			await dc.launchRequest({
+				type: 'perl',
+				request: 'launch',
+				name: 'Perl Debug',
+				program: PERL_SCRIPT,
+				stopOnEntry: true,
+				cwd: CWD,
+				transport: 'stdio',
+				sortKeys: true,
+			} as any);
+			await entryStopped;
+
+			const loadedStop = dc.waitForEvent('stopped');
+			const cont = await dc.continueRequest({ threadId: 1 });
+			expect(cont.success).toBe(true);
+			await loadedStop;
+
+			const trace = await dc.stackTraceRequest({ threadId: 1 });
 			expect(trace.success).toBe(true);
 			expect(trace.body.stackFrames[0].source!.path).toBe(INCLUDED_PERL_SCRIPT);
 			expect(trace.body.stackFrames[0].line).toBe(5);
@@ -127,6 +322,7 @@ describe('Perl Debug Adapter', () => {
 				program: BROKEN_PERL_SCRIPT,
 				stopOnEntry: true,
 				cwd: CWD,
+				transport: 'stdio',
 				sortKeys: true,
 			}).then(() => {
 				fail('launch request should not complete');
@@ -224,11 +420,23 @@ describe('PerlDebugSession fork handling', () => {
 	});
 
 	test('terminates unsupported forked sessions to avoid corrupted state', () => {
+		session.activeTransport = 'stdio';
 		session.handleSessionOutput('Forked, but do not know how to create a new TTY', 'stderr');
 
 		expect(session._session.kill).toHaveBeenCalledTimes(1);
 		expect(events.some((event) => event.event === 'terminated')).toBe(true);
 		expect(events.some((event) => event.event === 'output' && event.body.category === 'important' && event.body.output.includes('not supported by this adapter'))).toBe(true);
+	});
+
+	test('does not terminate on unsupported-fork warning when socket transport is active', () => {
+		session.activeTransport = 'socket';
+		session.handleSessionOutput('Forked, but do not know how to create a new TTY', 'stderr');
+
+		expect(session._session.kill).not.toHaveBeenCalled();
+		expect(events.some((event) => event.event === 'terminated')).toBe(false);
+		expect(events).toHaveLength(1);
+		expect(events[0].event).toBe('output');
+		expect(events[0].body.category).toBe('stderr');
 	});
 
 	test('forwards normal process output without terminating the session', () => {
@@ -395,7 +603,50 @@ describe('PerlDebugSession launch transport setup', () => {
 		} as any;
 	}
 
-	test('uses stdio transport by default', async () => {
+	test('uses socket transport by default', async () => {
+		jest.resetModules();
+
+		const child = createMockChildProcess();
+		const socket = { destroyed: false, destroy: jest.fn() };
+		let server: any;
+		const spawnMock = jest.fn(() => child);
+		const createServerMock = jest.fn((onConnection: Function) => {
+			server = createMockSocketServer(onConnection, socket);
+			return server;
+		});
+
+		jest.doMock('child_process', () => ({
+			...jest.requireActual('child_process'),
+			spawn: spawnMock
+		}));
+		jest.doMock('net', () => ({
+			...jest.requireActual('net'),
+			createServer: createServerMock
+		}));
+
+		const { PerlDebugSession } = require('../perlDebug');
+		const session = new PerlDebugSession();
+		(session as any).streamCatcher = { launch: jest.fn().mockResolvedValue([]), getBuffer: jest.fn(() => []), request: jest.fn() };
+		jest.spyOn(session as any, 'request').mockResolvedValue(['ok']);
+		session.sendEvent = jest.fn();
+		(session as any).logSendResponse = jest.fn();
+
+		await (session as any).launchRequest(createLaunchResponse(), createLaunchArgs());
+
+		expect(createServerMock).toHaveBeenCalledTimes(1);
+		expect(spawnMock).toHaveBeenCalledWith(
+			'perl',
+			expect.any(Array),
+			expect.objectContaining({
+				env: expect.objectContaining({
+					PERLDB_OPTS: 'ReadLine=0 RemotePort=127.0.0.1:43123'
+				})
+			})
+		);
+		expect((session as any).streamCatcher.launch).toHaveBeenCalledWith(socket, socket);
+	});
+
+	test('uses stdio transport when requested', async () => {
 		jest.resetModules();
 
 		const child = createMockChildProcess();
@@ -418,7 +669,7 @@ describe('PerlDebugSession launch transport setup', () => {
 		session.sendEvent = jest.fn();
 		(session as any).logSendResponse = jest.fn();
 
-		await (session as any).launchRequest(createLaunchResponse(), createLaunchArgs());
+		await (session as any).launchRequest(createLaunchResponse(), createLaunchArgs({ transport: 'stdio' }));
 
 		expect(createServerMock).not.toHaveBeenCalled();
 		expect(spawnMock).toHaveBeenCalledWith(
@@ -553,7 +804,7 @@ describe('PerlDebugSession launch transport setup', () => {
 		session.sendEvent = jest.fn();
 		(session as any).logSendResponse = jest.fn();
 
-		await (session as any).launchRequest(createLaunchResponse(), createLaunchArgs({ stopOnEntry: true }));
+		await (session as any).launchRequest(createLaunchResponse(), createLaunchArgs({ stopOnEntry: true, transport: 'stdio' }));
 
 		const events = (session.sendEvent as jest.Mock).mock.calls.map((call) => call[0]);
 		const stoppedIndex = events.findIndex((event) => event.event === 'stopped' && event.body.reason === 'entry');
@@ -801,6 +1052,28 @@ describe('PerlDebugSession thread-aware routing', () => {
 
 		expect(session.runtimePostponedBreakpointsMap.get(1).has('C:\\repo\\late.pl')).toBe(true);
 		expect(session.runtimePostponedBreakpointsMap.get(2).has('C:\\repo\\late.pl')).toBe(true);
+	});
+
+	test('changeFileContext treats perl5db regex errors as failure', async () => {
+		session.request = jest.fn()
+			// basename candidate => not loaded
+			.mockResolvedValueOnce(['f fork_socket_manual.pl', "No file matching 'fork_socket_manual.pl' is loaded.", 'DB<1>'])
+			// absolute candidate => perl5db regex error on Windows-style backslashes
+			.mockResolvedValueOnce([
+				'f C:\\repo\\fork_socket_manual.pl',
+				'\\C no longer supported in regex; marked by <-- HERE in m/^_<.*C:\\ <-- HERE repo\\fork_socket_manual.pl/ at C:/berrybrew/instance/5.38.0_64/perl/lib/perl5db.pl line 1899.',
+				'DB<1>'
+			])
+			// forward-slash absolute candidate => also not loaded
+			.mockResolvedValueOnce(['f C:/repo/fork_socket_manual.pl', "No file matching 'C:/repo/fork_socket_manual.pl' is loaded.", 'DB<1>']);
+
+		const changed = await session.changeFileContext('C:\\repo\\fork_socket_manual.pl', 1);
+
+		expect(changed).toBeUndefined();
+		expect(session.request).toHaveBeenCalledTimes(3);
+		expect(session.request).toHaveBeenNthCalledWith(1, 'f fork_socket_manual.pl', 1);
+		expect(session.request).toHaveBeenNthCalledWith(2, 'f C:\\repo\\fork_socket_manual.pl', 1);
+		expect(session.request).toHaveBeenNthCalledWith(3, 'f C:/repo/fork_socket_manual.pl', 1);
 	});
 
 	test('runtime postponed overlays are cloned from desired state', () => {
