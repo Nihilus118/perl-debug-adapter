@@ -1,6 +1,5 @@
 import * as Path from 'path';
 import { DebugClient } from '@vscode/debugadapter-testsupport';
-import * as fs from 'fs';
 
 jest.setTimeout(10000);
 
@@ -347,7 +346,30 @@ describe('Perl Debug Adapter', () => {
 			expect(evaluate.success).toBe(true);
 			const variable = await dc.variablesRequest({ variablesReference: evaluate.body.variablesReference });
 			expect(variable.success).toBe(true);
-			expect(JSON.parse(fs.readFileSync(Path.join(CWD, 'variables', 'list.json')).toString())).toEqual(variable.body);
+			expect(variable.body.variables.map((entry) => entry.name)).toEqual(['0', '1', '2', '3']);
+			expect(variable.body.variables.map((entry) => entry.value)).toEqual(['1', '2', '3', '"test"']);
+			expect(variable.body.variables.every((entry) => entry.type === 'SCALAR')).toBe(true);
+		});
+
+		test('setVariable updates array entry end-to-end', async () => {
+			expect(await goToLine(21)).toBe(true);
+			const evaluate = await dc.evaluateRequest({ expression: '@list' });
+			expect(evaluate.success).toBe(true);
+
+			const before = await dc.variablesRequest({ variablesReference: evaluate.body.variablesReference });
+			expect(before.success).toBe(true);
+
+			const updated = await dc.setVariableRequest({
+				variablesReference: evaluate.body.variablesReference,
+				name: '1',
+				value: '42'
+			} as any);
+			expect(updated.success).toBe(true);
+			expect(updated.body.value).toBe('42');
+
+			const variable = await dc.variablesRequest({ variablesReference: evaluate.body.variablesReference });
+			expect(variable.success).toBe(true);
+			expect(variable.body.variables.map((entry) => entry.value)).toEqual(['1', '42', '3', '"test"']);
 		});
 
 		test('hash', async () => {
@@ -361,7 +383,7 @@ describe('Perl Debug Adapter', () => {
 			const barFoo = variable.body.variables.find((entry) => entry.name === 'Bar Foo');
 			expect(barFoo).toBeDefined();
 			expect(barFoo?.type).toBe('HASH');
-			expect(barFoo?.namedVariables).toBe(3);
+			expect(barFoo?.variablesReference).toBeGreaterThan(0);
 
 			const barFooChildren = await dc.variablesRequest({ variablesReference: barFoo!.variablesReference });
 			expect(barFooChildren.success).toBe(true);
@@ -370,7 +392,34 @@ describe('Perl Debug Adapter', () => {
 			const art = barFooChildren.body.variables.find((entry) => entry.name === 'Art');
 			expect(art).toBeDefined();
 			expect(art?.type).toBe('HASH');
-			expect(art?.namedVariables).toBe(1);
+			expect(art?.variablesReference).toBeGreaterThan(0);
+		});
+
+		test('setVariable updates nested hash entry end-to-end', async () => {
+			expect(await goToLine(21)).toBe(true);
+			const evaluate = await dc.evaluateRequest({ expression: '%grades' });
+			expect(evaluate.success).toBe(true);
+
+			const variable = await dc.variablesRequest({ variablesReference: evaluate.body.variablesReference });
+			expect(variable.success).toBe(true);
+			const barFoo = variable.body.variables.find((entry) => entry.name === 'Bar Foo');
+			expect(barFoo).toBeDefined();
+
+			const before = await dc.variablesRequest({ variablesReference: barFoo!.variablesReference });
+			expect(before.success).toBe(true);
+
+			const updated = await dc.setVariableRequest({
+				variablesReference: barFoo!.variablesReference,
+				name: '1',
+				value: '456'
+			} as any);
+			expect(updated.success).toBe(true);
+			expect(updated.body.value).toBe('456');
+
+			const barFooChildren = await dc.variablesRequest({ variablesReference: barFoo!.variablesReference });
+			expect(barFooChildren.success).toBe(true);
+			const scalarEntry = barFooChildren.body.variables.find((entry) => entry.name === '1');
+			expect(scalarEntry?.value).toBe('456');
 		});
 
 		test('nested object', async () => {
@@ -912,7 +961,7 @@ describe('PerlDebugSession thread-aware routing', () => {
 		const varsResponse: any = { seq: 3, type: 'response', request_seq: 3, command: 'variables', success: true };
 		await session.variablesRequest(varsResponse, { variablesReference: myScopeRef } as any);
 
-		expect(session.request).toHaveBeenCalledWith('print STDERR join ("|", sort(keys( % { PadWalker::peek_my(2); })))', 2);
+		expect(session.request).toHaveBeenCalledWith('print STDERR join ("|", sort(keys( % { PadWalker::peek_my(2); }))) . "\\n"', 2);
 	});
 
 	test('routes evaluate request to frame thread', async () => {
@@ -937,6 +986,79 @@ describe('PerlDebugSession thread-aware routing', () => {
 
 		expect(session.getExpression).toHaveBeenCalledWith(123, 'x', 2);
 		expect((session.request as jest.Mock).mock.calls[0][1]).toBe(2);
+	});
+
+	test('setVariable updates nested array entries using loaded evaluateName', async () => {
+		const response: any = { seq: 6, type: 'response', request_seq: 6, command: 'setVariable', success: true };
+		session.variableThreadMap.set(123, 2);
+		session.childVarsMap.set(200123, [{
+			name: '100',
+			value: '100',
+			variablesReference: 0,
+			evaluateName: '$large_array[100]'
+		}]);
+		session.getExpression = jest.fn().mockReturnValue('$wrong[100]');
+		session.request = jest.fn()
+			.mockResolvedValueOnce(['cmd', 'DB<1>'])
+			.mockResolvedValueOnce(['cmd', '42', 'DB<1>']);
+
+		await session.setVariableRequest(response, {
+			variablesReference: 123,
+			name: '100',
+			value: '42'
+		} as any);
+
+		expect(session.getExpression).not.toHaveBeenCalled();
+		expect((session.request as jest.Mock).mock.calls[0][0]).toContain('$large_array[100] = 42');
+		expect(response.body.value).toBe('42');
+	});
+
+	test('setVariable updates nested hash entries using loaded evaluateName', async () => {
+		const response: any = { seq: 7, type: 'response', request_seq: 7, command: 'setVariable', success: true };
+		session.variableThreadMap.set(124, 2);
+		session.childVarsMap.set(200124, [{
+			name: '10',
+			value: '10',
+			variablesReference: 0,
+			evaluateName: "$large_hash{'10'}"
+		}]);
+		session.getExpression = jest.fn().mockReturnValue("$wrong{'10'}");
+		session.request = jest.fn()
+			.mockResolvedValueOnce(['cmd', 'DB<1>'])
+			.mockResolvedValueOnce(['cmd', '99', 'DB<1>']);
+
+		await session.setVariableRequest(response, {
+			variablesReference: 124,
+			name: '10',
+			value: '99'
+		} as any);
+
+		expect(session.getExpression).not.toHaveBeenCalled();
+		expect((session.request as jest.Mock).mock.calls[0][0]).toContain("$large_hash{'10'} = 99");
+		expect(response.body.value).toBe('99');
+	});
+
+	test('setVariable reloads children when evaluateName cache is missing', async () => {
+		const response: any = { seq: 8, type: 'response', request_seq: 8, command: 'setVariable', success: true };
+		session.variableThreadMap.set(125, 2);
+		session.getExpression = jest.fn().mockReturnValue('4');
+		session.loadContainerChildren = jest.fn().mockResolvedValue([
+			{ name: '4', value: '4', variablesReference: 0, evaluateName: "$large_hash{'4'}" }
+		]);
+		session.request = jest.fn()
+			.mockResolvedValueOnce(['cmd', 'DB<1>'])
+			.mockResolvedValueOnce(['cmd', '312312', 'DB<1>']);
+
+		await session.setVariableRequest(response, {
+			variablesReference: 125,
+			name: '4',
+			value: '312312'
+		} as any);
+
+		expect(session.loadContainerChildren).toHaveBeenCalledWith(125, 2);
+		expect((session.request as jest.Mock).mock.calls[0][0]).toContain("$large_hash{'4'} = 312312");
+		expect(response.body.value).toBe('312312');
+		expect(session.getExpression).not.toHaveBeenCalled();
 	});
 
 	test('rejects duplicate continue while same thread execution command is in-flight', () => {
@@ -1093,6 +1215,225 @@ describe('PerlDebugSession thread-aware routing', () => {
 
 		expect(session.runtimePostponedBreakpointsMap.get(2).get('C:\\repo\\late.pl')).toEqual([{ id: 2, line: 22, condition: '2' }]);
 		expect(session.desiredPostponedBreakpointsMap.get('C:\\repo\\late.pl')).toEqual([{ id: 1, line: 11, condition: '1' }]);
+	});
+
+	test('parseDumper does not eagerly populate nested child containers', () => {
+		const parentRef = 900;
+		session.parseDumper([
+			"'outer' => {",
+			"  'inner' => 1,",
+			'},',
+			'}'
+		], 1, parentRef, '$root');
+
+		const parentChildren = session.childVarsMap.get(100900);
+		expect(parentChildren).toBeDefined();
+		const outer = parentChildren.find((entry: any) => entry.name === 'outer');
+		expect(outer).toBeDefined();
+		expect(outer.variablesReference).toBeGreaterThan(0);
+		expect(session.childVarsMap.has(100000 + outer.variablesReference)).toBe(false);
+	});
+
+	test('parseDumper splits large arrays into chunk nodes using maxArrayElements', () => {
+		session.maxArrayElements = 2;
+		const parentRef = 901;
+		session.parseDumper([
+			'1,',
+			'2,',
+			'3,',
+			'4,',
+			'5,',
+			']'
+		], 1, parentRef, '@list');
+
+		const parentChildren = session.childVarsMap.get(100901);
+		expect(parentChildren.length).toBe(3);
+		expect(parentChildren.map((entry: any) => entry.name)).toEqual(['[0..1]', '[2..3]', '[4..4]']);
+
+		const firstChunkRef = parentChildren[0].variablesReference;
+		const firstChunkChildren = session.childVarsMap.get(100000 + firstChunkRef);
+		expect(firstChunkChildren.length).toBe(2);
+		expect(firstChunkChildren.map((entry: any) => entry.name)).toEqual(['0', '1']);
+	});
+
+	test('parseVars stores lazy container metadata instead of eagerly populating root array children', async () => {
+		session.parseVars = Object.getPrototypeOf(session).parseVars.bind(session);
+		session.getContainerSize = jest.fn().mockResolvedValue(250);
+		session.request = jest.fn().mockResolvedValue([
+			'cmd',
+			'250',
+			'DB<1>'
+		]);
+
+		const parsed = await session.parseVars(['@large_array'], 1);
+
+		expect(parsed).toHaveLength(1);
+		expect(parsed[0].variablesReference).toBeGreaterThan(0);
+		expect(session.getContainerSize).toHaveBeenCalledWith('@large_array', 'ARRAY', 1);
+		expect(session.request).not.toHaveBeenCalled();
+		expect(session.childVarsMap.has(100000 + parsed[0].variablesReference)).toBe(false);
+		expect(session.containerMetaMap.get(100000 + parsed[0].variablesReference)).toEqual({
+			expression: '@large_array',
+			type: 'ARRAY',
+			total: 250
+		});
+	});
+
+	test('parseVars stops after max variable dump retries when no dump header appears', async () => {
+		session.parseVars = Object.getPrototypeOf(session).parseVars.bind(session);
+		session.request = jest.fn().mockImplementation(async (command: string) => {
+			if (command.startsWith('print {$DB::OUT} Data::Dumper->new')) {
+				return ['cmd', 'garbage output', 'DB<1>'];
+			}
+			if (command === 'c') {
+				return ['c', 'still not a dump', 'DB<1>'];
+			}
+			return ['cmd', 'DB<1>'];
+		});
+
+		const parsed = await session.parseVars(['$x'], 1);
+
+		expect(parsed).toHaveLength(1);
+		expect(parsed[0].type).toBe('UNDEF');
+		const continueCalls = (session.request as jest.Mock).mock.calls.filter((call: any[]) => call[0] === 'c').length;
+		expect(continueCalls).toBe(25);
+	});
+
+	test('root array expansion returns direct chunk nodes without an extra outer level', async () => {
+		session.parseVars = Object.getPrototypeOf(session).parseVars.bind(session);
+		session.maxArrayElements = 100;
+		session.getContainerSize = jest.fn().mockResolvedValue(250);
+		session.request = jest.fn().mockResolvedValue([
+			'cmd',
+			'250',
+			'DB<1>'
+		]);
+
+		const parsed = await session.parseVars(['@large_array'], 1);
+		const vars = await session.loadContainerChildren(parsed[0].variablesReference, 1);
+
+		expect(parsed[0].indexedVariables).toBeUndefined();
+		expect(vars.map((entry: any) => entry.name)).toEqual(['[0..99]', '[100..199]', '[200..249]']);
+		expect(session.request).not.toHaveBeenCalled();
+	});
+
+	test('large root arrays keep chunk variable references positive for deep expansion', async () => {
+		session.parseVars = Object.getPrototypeOf(session).parseVars.bind(session);
+		session.maxArrayElements = 100;
+		session.getContainerSize = jest.fn().mockResolvedValue(1000000);
+
+		const parsed = await session.parseVars(['@large_array'], 1);
+		const vars = await session.loadContainerChildren(parsed[0].variablesReference, 1);
+
+		expect(vars).toHaveLength(10000);
+		expect(vars[0].variablesReference).toBeGreaterThan(1000);
+		expect(vars[vars.length - 1].variablesReference).toBeGreaterThan(1000);
+	});
+
+	test('small root arrays still expose indexedVariables for direct expansion', async () => {
+		session.parseVars = Object.getPrototypeOf(session).parseVars.bind(session);
+		session.maxArrayElements = 100;
+		session.getContainerSize = jest.fn().mockResolvedValue(4);
+
+		const parsed = await session.parseVars(['@list'], 1);
+
+		expect(parsed).toHaveLength(1);
+		expect(parsed[0].indexedVariables).toBe(4);
+	});
+
+	test('loadContainerChildren returns chunk nodes with sane evaluate names', async () => {
+		session.maxArrayElements = 100;
+		session.containerMetaMap.set(100901, { expression: '@large_array', type: 'ARRAY', total: 250 });
+
+		const vars = await session.loadContainerChildren(901, 1);
+
+		expect(vars.map((entry: any) => entry.name)).toEqual(['[0..99]', '[100..199]', '[200..249]']);
+		expect(vars.every((entry: any) => entry.evaluateName === '$large_array')).toBe(true);
+		expect(vars.every((entry: any) => !entry.evaluateName.includes('[[‘') && !entry.evaluateName.includes('[['))).toBe(true);
+	});
+
+	test('variablesRequest treats high adapter refs as nested variables instead of scopes', async () => {
+		session.childVarsMap.set(110050, [{ name: '100', value: '100', variablesReference: 0 }]);
+		session.variableThreadMap.set(10050, 1);
+		const response: any = { seq: 1, type: 'response', request_seq: 1, command: 'variables', success: true };
+
+		await session.variablesRequest(response, { variablesReference: 10050 } as any);
+
+		expect(response.body.variables).toHaveLength(1);
+		expect(response.body.variables[0]).toMatchObject({ name: '100', value: '100', variablesReference: 0, evaluateName: '$x' });
+		expect(session.request).not.toHaveBeenCalled();
+	});
+
+	test('expanding one array chunk loads only that chunk range', async () => {
+		session.chunkMetaMap.set(100998, {
+			parentExpression: '@large_array',
+			type: 'ARRAY',
+			start: 100,
+			end: 199
+		});
+		session.request = jest.fn().mockResolvedValue([
+			'cmd',
+			'$VAR1 = [',
+			'  100,',
+			'  101,',
+			'  102,',
+			'];',
+			'DB<1>'
+		]);
+
+		const vars = await session.loadContainerChildren(998, 1);
+
+		expect(session.request).toHaveBeenCalledTimes(1);
+		expect((session.request as jest.Mock).mock.calls[0][0]).toContain('[100..199]');
+		expect(vars.map((entry: any) => entry.name)).toEqual(['100', '101', '102']);
+		expect(vars.map((entry: any) => entry.evaluateName)).toEqual([
+			'$large_array[100]',
+			'$large_array[101]',
+			'$large_array[102]'
+		]);
+	});
+
+	test('loadContainerChildren returns hash chunk nodes using maxHashElements', async () => {
+		session.maxHashElements = 2;
+		session.containerMetaMap.set(100902, { expression: '%large_hash', type: 'HASH', total: 5 });
+
+		const vars = await session.loadContainerChildren(902, 1);
+
+		expect(vars.map((entry: any) => entry.name)).toEqual(['[keys 0..1]', '[keys 2..3]', '[keys 4..4]']);
+		expect(vars.every((entry: any) => entry.evaluateName === '$large_hash')).toBe(true);
+	});
+
+	test('loadChunkChildren requests numeric-aware ordering for hash chunk keys', async () => {
+		session.chunkMetaMap.set(100903, {
+			parentExpression: '%large_hash',
+			type: 'HASH',
+			start: 0,
+			end: 4
+		});
+		session.request = jest.fn().mockResolvedValue([
+			'cmd',
+			'0\t1\t2\t10\t11',
+			'DB<1>'
+		]);
+		session.parseVars = jest.fn().mockImplementation(async ([expression]: string[]) => [{
+			name: expression,
+			value: expression,
+			variablesReference: 0,
+			evaluateName: expression
+		}]);
+
+		const vars = await session.loadContainerChildren(903, 1);
+
+		expect((session.request as jest.Mock).mock.calls[0][0]).toContain('my $all_numeric = 1');
+		expect((session.request as jest.Mock).mock.calls[0][0]).toContain('$a <=> $b');
+		expect(vars.map((entry: any) => entry.name)).toEqual(['0', '1', '2', '10', '11']);
+		expect(vars.map((entry: any) => entry.evaluateName)).toEqual([
+			"$large_hash{'0'}",
+			"$large_hash{'1'}",
+			"$large_hash{'2'}",
+			"$large_hash{'10'}",
+			"$large_hash{'11'}"
+		]);
 	});
 
 	test('clearThreadScopedState removes per-thread frames variables and runtime overlays', () => {

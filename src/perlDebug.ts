@@ -55,13 +55,31 @@ interface IScopeHandle {
 	threadId: number;
 }
 
+interface IContainerMeta {
+	expression: string;
+	type: 'ARRAY' | 'HASH';
+	total: number;
+}
+
+interface IChunkMeta {
+	parentExpression: string;
+	type: 'ARRAY' | 'HASH';
+	start: number;
+	end: number;
+}
+
 export class PerlDebugSession extends LoggingDebugSession {
 	private static threadId = 1;
+	private static readonly variableRefStart = 10000;
+	private static readonly maxVariableDumpContinueTries = 25;
 	private currentBreakpointID = 1;
 
 	private _variableHandles = new Handles<IScopeHandle>();
 	private childVarsMap = new Map<number, Variable[]>();
 	private parentVarsMap = new Map<number, Variable>();
+	private varExpressionMap = new Map<number, string>();
+	private containerMetaMap = new Map<number, IContainerMeta>();
+	private chunkMetaMap = new Map<number, IChunkMeta>();
 	private frameThreadMap = new Map<number, number>();
 	private variableThreadMap = new Map<number, number>();
 	private threadVarRef = new Map<number, number>();
@@ -241,14 +259,14 @@ export class PerlDebugSession extends LoggingDebugSession {
 
 	private peekVarRef(threadId: number): number {
 		if (!this.threadVarRef.has(threadId)) {
-			this.threadVarRef.set(threadId, 999);
+			this.threadVarRef.set(threadId, PerlDebugSession.variableRefStart);
 		}
 		return this.threadVarRef.get(threadId)!;
 	}
 
 	private consumeVarRef(threadId: number): number {
 		const nextRef = this.peekVarRef(threadId);
-		this.threadVarRef.set(threadId, nextRef - 1);
+		this.threadVarRef.set(threadId, nextRef + 1);
 		return nextRef;
 	}
 
@@ -277,6 +295,21 @@ export class PerlDebugSession extends LoggingDebugSession {
 		this.parentVarsMap.forEach((_variable, scopedVarRef) => {
 			if (Math.trunc(scopedVarRef / 100000) === threadId) {
 				this.parentVarsMap.delete(scopedVarRef);
+			}
+		});
+		this.varExpressionMap.forEach((_expression, scopedVarRef) => {
+			if (Math.trunc(scopedVarRef / 100000) === threadId) {
+				this.varExpressionMap.delete(scopedVarRef);
+			}
+		});
+		this.containerMetaMap.forEach((_meta, scopedVarRef) => {
+			if (Math.trunc(scopedVarRef / 100000) === threadId) {
+				this.containerMetaMap.delete(scopedVarRef);
+			}
+		});
+		this.chunkMetaMap.forEach((_meta, scopedVarRef) => {
+			if (Math.trunc(scopedVarRef / 100000) === threadId) {
+				this.chunkMetaMap.delete(scopedVarRef);
 			}
 		});
 
@@ -658,6 +691,229 @@ export class PerlDebugSession extends LoggingDebugSession {
 			}
 		}
 		return expression;
+	}
+
+	private normalizeExpressionForContainer(expression: string): string {
+		if (expression.startsWith('[') && expression.endsWith(']')) {
+			return this.normalizeExpressionForContainer(expression.slice(1, -1));
+		}
+		if (expression.startsWith('{') && expression.endsWith('}')) {
+			return this.normalizeExpressionForContainer(expression.slice(1, -1));
+		}
+		if (expression.startsWith('@') || expression.startsWith('%')) {
+			return `$${expression.slice(1)}`;
+		}
+		return expression;
+	}
+
+	private buildIndexedExpression(parentExpression: string, index: number): string {
+		const normalized = this.normalizeExpressionForContainer(parentExpression);
+		return `${normalized}[${index}]`;
+	}
+
+	private buildNamedExpression(parentExpression: string, key: string): string {
+		const normalized = this.normalizeExpressionForContainer(parentExpression);
+		const escaped = key.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+		return `${(normalized.endsWith(']') ? `${normalized}->` : normalized)}{'${escaped}'}`;
+	}
+
+	private buildHashKeySliceExpression(parentExpression: string, start: number, end: number): string {
+		const keysSource = parentExpression.startsWith('%')
+			? `keys ${parentExpression}`
+			: `do { my $__h = ${this.normalizeExpressionForContainer(parentExpression)}; keys %{$__h} }`;
+		return `do { my @k = ${keysSource}; my $all_numeric = 1; for my $k (@k) { if ($k !~ /^-?\\d+$/) { $all_numeric = 0; last; } } @k = $all_numeric ? sort { $a <=> $b } @k : sort { $a cmp $b } @k; @k[${start}..${end}] }`;
+	}
+
+	private hasDebuggerCommandError(lines: string[]): boolean {
+		const payload = lines.slice(1, -1).filter((line) => line !== '');
+		if (payload.length === 0) {
+			return false;
+		}
+		return payload.some((line) => /syntax error|Compilation failed|Undefined subroutine|Modification of a read-only value attempted|Can't locate|Can't use|Can't modify|no longer supported in regex|\sat\s.*line\s\d+\.?/i.test(line));
+	}
+
+	private countChar(line: string, charToCount: string): number {
+		let count = 0;
+		for (let i = 0; i < line.length; i++) {
+			if (line.charAt(i) === charToCount) {
+				count++;
+			}
+		}
+		return count;
+	}
+
+	private skipNestedBlock(lines: string[], startIndex: number, openChar: string): number {
+		const closeChar = openChar === '{' ? '}' : ']';
+		let depth = this.countChar(lines[startIndex], openChar) - this.countChar(lines[startIndex], closeChar);
+		let index = startIndex;
+		while (depth > 0 && index + 1 < lines.length) {
+			index++;
+			const current = lines[index];
+			depth += this.countChar(current, openChar);
+			depth -= this.countChar(current, closeChar);
+		}
+		return index;
+	}
+
+	private toDumperExpression(expression: string): string {
+		if (expression.startsWith('@')) {
+			return `[${expression}]`;
+		}
+		if (expression.startsWith('%')) {
+			return `{${expression}}`;
+		}
+		return expression;
+	}
+
+	private buildOutputPrintCommand(payload: string): string {
+		if (this.activeTransport === 'socket') {
+			return `print {$DB::OUT} ${payload}`;
+		}
+		return `print STDERR ${payload}`;
+	}
+
+	private extractCommandPayload(lines: string[]): string[] {
+		return lines
+			.filter((line) => line !== '')
+			.slice(1, -1)
+			.map((line) => line.trim())
+			.filter((line) => line.length > 0);
+	}
+
+	private async getContainerSize(expression: string, type: 'ARRAY' | 'HASH', threadId: number): Promise<number> {
+		const normalized = this.normalizeExpressionForContainer(expression);
+		let perlExpr: string;
+		if (type === 'ARRAY') {
+			if (expression.startsWith('@')) {
+				perlExpr = `scalar(${expression})`;
+			} else {
+				perlExpr = `do { my $__v = ${normalized}; ref($__v) eq 'ARRAY' ? scalar(@{$__v}) : 0 }`;
+			}
+		} else {
+			if (expression.startsWith('%')) {
+				perlExpr = `scalar(keys ${expression})`;
+			} else {
+				perlExpr = `do { my $__v = ${normalized}; ref($__v) eq 'HASH' ? scalar(keys %{$__v}) : 0 }`;
+			}
+		}
+
+		const payload = this.extractCommandPayload(await this.request(this.buildOutputPrintCommand(`${perlExpr} . "\\n"`), threadId));
+		if (payload.length === 0) {
+			return 0;
+		}
+		const parsed = parseInt(payload[payload.length - 1], 10);
+		return Number.isNaN(parsed) ? 0 : parsed;
+	}
+
+	private createChunkNodesForContainer(ref: number, threadId: number, meta: IContainerMeta): Variable[] {
+		const chunkSize = meta.type === 'HASH' ? this.maxHashElements : this.maxArrayElements;
+		if (chunkSize <= 0 || meta.total <= chunkSize) {
+			return [];
+		}
+
+		const scopedRef = this.getScopedVarRef(threadId, ref);
+		const chunks: DebugProtocol.Variable[] = [];
+		for (let start = 0; start < meta.total; start += chunkSize) {
+			const end = Math.min(start + chunkSize, meta.total) - 1;
+			const chunkRef = this.consumeVarRef(threadId);
+			this.variableThreadMap.set(chunkRef, threadId);
+			this.chunkMetaMap.set(this.getScopedVarRef(threadId, chunkRef), {
+				parentExpression: meta.expression,
+				type: meta.type,
+				start,
+				end
+			});
+			chunks.push({
+				name: meta.type === 'HASH' ? `[keys ${start}..${end}]` : `[${start}..${end}]`,
+				value: `${meta.type} CHUNK`,
+				type: meta.type,
+				variablesReference: chunkRef,
+				// Keep evaluateName on the container expression to avoid bogus expressions
+				// like $large_array[[0..99]].
+				evaluateName: this.normalizeExpressionForContainer(meta.expression),
+				presentationHint: { kind: 'data' }
+			});
+		}
+		this.childVarsMap.set(scopedRef, chunks as Variable[]);
+		return chunks as Variable[];
+	}
+
+	private shouldExposeContainerCount(type: 'ARRAY' | 'HASH', total: number): boolean {
+		const chunkSize = type === 'HASH' ? this.maxHashElements : this.maxArrayElements;
+		return chunkSize <= 0 || total <= chunkSize;
+	}
+
+	private async loadChunkChildren(chunkRef: number, threadId: number, chunk: IChunkMeta): Promise<Variable[]> {
+		if (chunk.type === 'ARRAY') {
+			const parentExpr = chunk.parentExpression;
+			const dumpExpr = parentExpr.startsWith('@')
+				? `[@{[ ${parentExpr}[${chunk.start}..${chunk.end}] ]}]`
+				: `[ @{ ${this.normalizeExpressionForContainer(parentExpr)} }[${chunk.start}..${chunk.end}] ]`;
+			const varDump = this.extractCommandPayload(await this.request(this.buildOutputPrintCommand(`Data::Dumper->new([${dumpExpr}], [])->Deepcopy(${this.deepcopy ? '1' : '0'})->Indent(1)->Terse(0)->Sortkeys(${this.sortKeys ? '1' : '0'})->Useqq(1)->Dump()`), threadId));
+			if (varDump.length === 0) {
+				this.childVarsMap.set(this.getScopedVarRef(threadId, chunkRef), []);
+				return [];
+			}
+			this.parseDumper(varDump.slice(1, -1), threadId, chunkRef, `@chunk`);
+			const vars = this.childVarsMap.get(this.getScopedVarRef(threadId, chunkRef)) || [];
+			for (let i = 0; i < vars.length; i++) {
+				vars[i].name = `${chunk.start + i}`;
+				(vars[i] as DebugProtocol.Variable).evaluateName = this.buildIndexedExpression(parentExpr, chunk.start + i);
+			}
+			this.childVarsMap.set(this.getScopedVarRef(threadId, chunkRef), vars);
+			return vars;
+		}
+
+		const parentExpr = chunk.parentExpression;
+		const keysExpr = this.buildHashKeySliceExpression(parentExpr, chunk.start, chunk.end);
+		const keysPayload = this.extractCommandPayload(await this.request(this.buildOutputPrintCommand(`join("\\t", ${keysExpr}) . "\\n"`), threadId));
+		const keys = keysPayload.length > 0 ? keysPayload[keysPayload.length - 1].split('\t').filter((k) => k.length > 0) : [];
+		const vars: DebugProtocol.Variable[] = [];
+		for (let i = 0; i < keys.length; i++) {
+			const key = keys[i];
+			const valueExpr = this.buildNamedExpression(parentExpr, key);
+			const one = await this.parseVars([valueExpr], threadId);
+			if (one.length > 0) {
+				const entry = one[0];
+				entry.name = key;
+				(entry as DebugProtocol.Variable).evaluateName = valueExpr;
+				vars.push(entry);
+			}
+		}
+		this.childVarsMap.set(this.getScopedVarRef(threadId, chunkRef), vars as Variable[]);
+		return vars as Variable[];
+	}
+
+	private async loadContainerChildren(ref: number, threadId: number): Promise<Variable[] | undefined> {
+		const scopedRef = this.getScopedVarRef(threadId, ref);
+		const chunk = this.chunkMetaMap.get(scopedRef);
+		if (chunk) {
+			return this.loadChunkChildren(ref, threadId, chunk);
+		}
+
+		const meta = this.containerMetaMap.get(scopedRef);
+		if (meta) {
+			const chunkNodes = this.createChunkNodesForContainer(ref, threadId, meta);
+			if (chunkNodes.length > 0) {
+				return chunkNodes;
+			}
+		}
+
+		const expression = this.varExpressionMap.get(scopedRef);
+		if (!expression) {
+			return undefined;
+		}
+
+		const dumpExpression = this.toDumperExpression(expression);
+		const varDump = this.extractCommandPayload(await this.request(this.buildOutputPrintCommand(`Data::Dumper->new([${dumpExpression}], [])->Deepcopy(${this.deepcopy ? '1' : '0'})->Indent(1)->Terse(0)->Sortkeys(${this.sortKeys ? '1' : '0'})->Useqq(1)->Dump()`), threadId));
+
+		if (varDump.length === 0) {
+			this.childVarsMap.set(scopedRef, []);
+			return [];
+		}
+
+		this.parseDumper(varDump.slice(1, -1), threadId, ref, expression);
+		return this.childVarsMap.get(scopedRef);
 	}
 
 	/**
@@ -1142,7 +1398,7 @@ export class PerlDebugSession extends LoggingDebugSession {
 				new Scope('Specials', specialRef, true)
 			]
 		};
-		this.threadVarRef.set(threadId, 999);
+		this.threadVarRef.set(threadId, PerlDebugSession.variableRefStart);
 		this.logSendResponse(response);
 	}
 
@@ -1151,17 +1407,18 @@ export class PerlDebugSession extends LoggingDebugSession {
 		let parsedVars: Variable[] = [];
 		const threadId = this.variableThreadMap.get(args.variablesReference) || this.currentStoppedThreadId;
 		const handle = this._variableHandles.get(args.variablesReference);
-		// < 1000 => nested vars
-		if (args.variablesReference >= 1000) {
-			if (handle && handle.scope === 'my') {
-				varNames = (await this.request('print STDERR join ("|", sort(keys( % { PadWalker::peek_my(2); })))', threadId))[1].split('|');
+		if (handle) {
+			if (handle.scope === 'my') {
+				const payload = this.extractCommandPayload(await this.request(this.buildOutputPrintCommand('join ("|", sort(keys( % { PadWalker::peek_my(2); }))) . "\\n"'), threadId));
+				varNames = payload.length > 0 ? payload[payload.length - 1].split('|') : [''];
 				logger.log(`Varnames: ${varNames.join(', ')}`);
 			}
-			if (handle && handle.scope === 'our') {
-				varNames = (await this.request('print STDERR join ("|", sort(keys( % { PadWalker::peek_our(2); })))', threadId))[1].split('|');
+			if (handle.scope === 'our') {
+				const payload = this.extractCommandPayload(await this.request(this.buildOutputPrintCommand('join ("|", sort(keys( % { PadWalker::peek_our(2); }))) . "\\n"'), threadId));
+				varNames = payload.length > 0 ? payload[payload.length - 1].split('|') : [''];
 				logger.log(`Varnames: ${varNames.join(', ')}`);
 			}
-			else if (handle && handle.scope === 'special') {
+			else if (handle.scope === 'special') {
 				varNames = [
 					'%ENV',
 					'@ARGV',
@@ -1210,11 +1467,16 @@ export class PerlDebugSession extends LoggingDebugSession {
 			}
 		} else {
 			// get already parsed vars from map
-			const newVars: DebugProtocol.Variable[] | undefined = this.childVarsMap.get(this.getScopedVarRef(threadId, args.variablesReference));
+			let newVars: DebugProtocol.Variable[] | undefined = this.childVarsMap.get(this.getScopedVarRef(threadId, args.variablesReference));
+			if (!newVars) {
+				newVars = await this.loadContainerChildren(args.variablesReference, threadId);
+			}
 			// build expressions only for the variables which are displayed as it can be kinda costly
 			if (newVars) {
 				for (let i = 0; i < newVars.length; i++) {
-					newVars[i].evaluateName = this.getExpression(args.variablesReference, newVars[i].name, threadId);
+					if (!newVars[i].evaluateName) {
+						newVars[i].evaluateName = this.getExpression(args.variablesReference, newVars[i].name, threadId);
+					}
 				}
 				parsedVars = parsedVars.concat(newVars);
 			}
@@ -1243,12 +1505,6 @@ export class PerlDebugSession extends LoggingDebugSession {
 			return;
 		}
 
-		if (varName.startsWith('@')) {
-			varName = `[${varName}]`;
-		} else if (varName.startsWith('%')) {
-			varName = `{${varName}}`;
-		}
-
 		// get variable value
 		const evaledVar: DebugProtocol.Variable = (await this.parseVars([varName], threadId))[0];
 		evaledVar.evaluateName = this.getExpression(evaledVar.variablesReference, evaledVar.name, threadId);
@@ -1268,20 +1524,48 @@ export class PerlDebugSession extends LoggingDebugSession {
 	private async parseVars(varNames: string[], threadId: number = PerlDebugSession.threadId): Promise<Variable[]> {
 		let vs: DebugProtocol.Variable[] = [];
 		for (let i = 0; i < varNames.length; i++) {
-			let varName = varNames[i];
-			if (varName.startsWith('@')) {
-				varName = `[${varName}]`;
-			} else if (varName.startsWith('%')) {
-				varName = `{${varName}}`;
+			const originalExpression = varNames[i];
+			if (originalExpression.startsWith('@') || originalExpression.startsWith('%')) {
+				const ref = this.consumeVarRef(threadId);
+				this.variableThreadMap.set(ref, threadId);
+				this.varExpressionMap.set(this.getScopedVarRef(threadId, ref), originalExpression);
+				const containerType = originalExpression.startsWith('@') ? 'ARRAY' : 'HASH';
+				const total = await this.getContainerSize(originalExpression, containerType, threadId);
+				this.containerMetaMap.set(this.getScopedVarRef(threadId, ref), {
+					expression: originalExpression,
+					type: containerType,
+					total
+				});
+				const newVar: DebugProtocol.Variable = {
+					name: originalExpression,
+					value: containerType,
+					variablesReference: ref,
+					evaluateName: originalExpression,
+					presentationHint: { kind: 'baseClass' }
+				};
+				if (containerType === 'HASH' && this.shouldExposeContainerCount(containerType, total)) {
+					newVar.namedVariables = total;
+				} else if (containerType === 'ARRAY' && this.shouldExposeContainerCount(containerType, total)) {
+					newVar.indexedVariables = total;
+				}
+				vs.push(newVar);
+				this.parentVarsMap.set(this.getScopedVarRef(threadId, ref), newVar);
+				continue;
 			}
 
-			let varDump = (await this.request(`print STDERR Data::Dumper->new([${varName}], [])->Deepcopy(${this.deepcopy ? '1' : '0'})->Indent(1)->Terse(0)->Sortkeys(${this.sortKeys ? '1' : '0'})->Useqq(1)->Dump()`, threadId)).filter(e => { return e !== ''; }).slice(1, -1);
+			const dumpExpression = this.toDumperExpression(originalExpression);
+			let varDump = this.extractCommandPayload(await this.request(this.buildOutputPrintCommand(`Data::Dumper->new([${dumpExpression}], [])->Deepcopy(${this.deepcopy ? '1' : '0'})->Indent(1)->Terse(0)->Sortkeys(${this.sortKeys ? '1' : '0'})->Useqq(1)->Dump()`), threadId));
 			try {
+				let continueTries = 0;
 				while (true) {
 					// Continue every time we reach a breakpoint during this call until we have proper output
-					if (varDump[0].match(/^\$VAR1\s=\s.*/)) {
+					if (varDump[0] && varDump[0].match(/^\$VAR1\s=\s.*/)) {
 						break;
-					} else if (varDump[0].match(/^.* at .* line \d+\.$/)) {
+					} else if (varDump[0] && varDump[0].match(/^.* at .* line \d+\.$/)) {
+						varDump = [];
+						break;
+					} else if (continueTries >= PerlDebugSession.maxVariableDumpContinueTries) {
+						logger.error(`Reached max variable dump retries for ${originalExpression}`);
 						varDump = [];
 						break;
 					} else {
@@ -1291,14 +1575,15 @@ export class PerlDebugSession extends LoggingDebugSession {
 							// ensure that every script output is send to the debug console before closing the session
 							await this.request('sleep(.5)', threadId);
 							this.logSendEvent(new TerminatedEvent());
-							return [new Variable(varName, '')];
+							return [new Variable(originalExpression, '')];
 						}
+						continueTries++;
 						varDump = (await this.request('c', threadId)).filter(e => { return e !== ''; }).slice(1, -1);
 					}
 				}
 			} catch (error) {
 				// Log error and continue with parsing the next variable
-				logger.error(`Could not parse variable ${varName}: ${varDump.join('\n')}`);
+				logger.error(`Could not parse variable ${originalExpression}: ${varDump.join('\n')}`);
 				this.consumeVarRef(threadId);
 				continue;
 			}
@@ -1321,10 +1606,21 @@ export class PerlDebugSession extends LoggingDebugSession {
 					} else {
 						const ref = this.consumeVarRef(threadId);
 						this.variableThreadMap.set(ref, threadId);
-						this.parseDumper(varDump.slice(1, -1), threadId, ref);
+						this.varExpressionMap.set(this.getScopedVarRef(threadId, ref), originalExpression);
+						this.varExpressionMap.set(this.getScopedVarRef(threadId, ref), originalExpression);
 						const matched = varDump[varDump.length - 1].trim().match(this.isVarEnd);
 						if (matched) {
 							const type = `${(matched[1] === '}' ? 'HASH' : 'ARRAY')}${(matched[3] ? ` ${matched[3]}` : '')}`;
+							const containerType = type.startsWith('HASH') ? 'HASH' : (type.startsWith('ARRAY') ? 'ARRAY' : undefined);
+							let total = 0;
+							if (containerType) {
+								total = await this.getContainerSize(originalExpression, containerType, threadId);
+								this.containerMetaMap.set(this.getScopedVarRef(threadId, ref), {
+									expression: originalExpression,
+									type: containerType,
+									total
+								});
+							}
 							const newVar: DebugProtocol.Variable = {
 								name: varNames[i],
 								value: type,
@@ -1332,10 +1628,10 @@ export class PerlDebugSession extends LoggingDebugSession {
 								evaluateName: varNames[i],
 								presentationHint: { kind: 'baseClass' }
 							};
-							if (type.startsWith('HASH')) {
-								newVar.namedVariables = this.childVarsMap.get(this.getScopedVarRef(threadId, ref))?.length;
-							} else if (type.startsWith('ARRAY')) {
-								newVar.indexedVariables = this.childVarsMap.get(this.getScopedVarRef(threadId, ref))?.length;
+							if (type.startsWith('HASH') && this.shouldExposeContainerCount('HASH', total)) {
+								newVar.namedVariables = total;
+							} else if (type.startsWith('ARRAY') && this.shouldExposeContainerCount('ARRAY', total)) {
+								newVar.indexedVariables = total;
 							}
 							vs.push(newVar);
 							this.parentVarsMap.set(this.getScopedVarRef(threadId, ref), newVar);
@@ -1383,7 +1679,7 @@ export class PerlDebugSession extends LoggingDebugSession {
 	private isNestedArray = /^(bless\(\s*)?(\{|\[)$/;
 	private isVarEnd = /^(\}|\]),?(\s?'(.*)'\s\))?[,|;]?/;
 	// Parse output of Data::Dumper
-	private parseDumper(lines: string[], threadId: number = PerlDebugSession.threadId, refOverride?: number): { parsedLines: number, varType: string, numChildVars: number; } {
+	private parseDumper(lines: string[], threadId: number = PerlDebugSession.threadId, refOverride?: number, parentExpression?: string): { parsedLines: number, varType: string, numChildVars: number; } {
 		let childVars: DebugProtocol.Variable[] = [];
 		let varType: string = '';
 		const ref: number = typeof refOverride === 'number' ? refOverride : this.consumeVarRef(threadId);
@@ -1400,72 +1696,75 @@ export class PerlDebugSession extends LoggingDebugSession {
 
 			matched = trimmedLine.match(this.isNamedVariable);
 			if (matched) {
+				const childExpression = parentExpression ? this.buildNamedExpression(parentExpression, matched[1].replace(/"/, '')) : undefined;
 				childVars.push({
 					name: matched[1].replace(/"/, ''),
 					value: matched[2],
 					variablesReference: 0,
+					evaluateName: childExpression,
 					presentationHint: { kind: 'data' },
 					type: 'SCALAR'
 				});
-				if (childVars.length >= this.maxHashElements) {
-					break;
-				}
 				continue;
 			}
 			matched = trimmedLine.match(this.isNestedHash);
 			if (matched) {
 				const childRef = this.consumeVarRef(threadId);
 				const keyName = (matched[1] || '').replace(/^['"]|['"]$/g, '');
+				const openChar = matched[2];
+				const childExpression = parentExpression ? this.buildNamedExpression(parentExpression, keyName) : undefined;
 				const newVar: DebugProtocol.Variable = {
 					name: keyName,
-					value: '',
+					value: 'HASH',
+					type: 'HASH',
 					variablesReference: childRef,
+					evaluateName: childExpression,
 					presentationHint: { kind: 'innerClass' }
 				};
 				this.parentVarsMap.set(this.getScopedVarRef(threadId, childRef), newVar);
 				this.variableThreadMap.set(childRef, threadId);
-				const parsed = this.parseDumper(lines.slice(i + 1), threadId, childRef);
-				i += parsed.parsedLines;
-				newVar.value = parsed.varType;
-				newVar.type = parsed.varType;
-				newVar.namedVariables = parsed.numChildVars;
+				if (childExpression) {
+					this.varExpressionMap.set(this.getScopedVarRef(threadId, childRef), childExpression);
+				}
 				childVars.push(newVar);
+				i = this.skipNestedBlock(lines, i, openChar);
 				continue;
 			}
 			matched = trimmedLine.match(this.isIndexedVariable);
 			if (matched) {
+				const nextIndex = childVars.length;
+				const childExpression = parentExpression ? this.buildIndexedExpression(parentExpression, nextIndex) : undefined;
 				childVars.push({
-					name: `${childVars.length}`,
+					name: `${nextIndex}`,
 					value: matched[1],
 					variablesReference: 0,
+					evaluateName: childExpression,
 					presentationHint: { kind: 'data' },
 					type: 'SCALAR'
 				});
-				if (childVars.length >= this.maxArrayElements) {
-					break;
-				}
 				continue;
 			}
 			matched = trimmedLine.match(this.isNestedArray);
 			if (matched) {
 				const childRef = this.consumeVarRef(threadId);
+				const nextIndex = childVars.length;
+				const openChar = matched[2];
+				const childExpression = parentExpression ? this.buildIndexedExpression(parentExpression, nextIndex) : undefined;
 				const newVar: DebugProtocol.Variable = {
-					name: `${childVars.length}`,
-					value: '',
+					name: `${nextIndex}`,
+					value: 'ARRAY',
+					type: 'ARRAY',
 					variablesReference: childRef,
+					evaluateName: childExpression,
 					presentationHint: { kind: 'innerClass' }
 				};
 				this.parentVarsMap.set(this.getScopedVarRef(threadId, childRef), newVar);
 				this.variableThreadMap.set(childRef, threadId);
-				const parsed = this.parseDumper(lines.slice(i + 1), threadId, childRef);
-				i += parsed.parsedLines;
-				newVar.value = parsed.varType;
-				newVar.type = parsed.varType;
-				newVar.indexedVariables = parsed.numChildVars;
-				childVars.push(newVar);
-				if (childVars.length >= this.maxArrayElements) {
-					break;
+				if (childExpression) {
+					this.varExpressionMap.set(this.getScopedVarRef(threadId, childRef), childExpression);
 				}
+				childVars.push(newVar);
+				i = this.skipNestedBlock(lines, i, openChar);
 				continue;
 			}
 			if (line.trim() !== '') {
@@ -1478,21 +1777,55 @@ export class PerlDebugSession extends LoggingDebugSession {
 				});
 			}
 		}
-		this.childVarsMap.set(this.getScopedVarRef(threadId, ref), childVars);
+		let finalChildren = childVars;
+		const chunkSize = varType.startsWith('HASH') ? this.maxHashElements : this.maxArrayElements;
+		if (chunkSize > 0 && childVars.length > chunkSize) {
+			const chunks: DebugProtocol.Variable[] = [];
+			for (let start = 0; start < childVars.length; start += chunkSize) {
+				const end = Math.min(start + chunkSize, childVars.length);
+				const chunkRef = this.consumeVarRef(threadId);
+				this.variableThreadMap.set(chunkRef, threadId);
+				this.childVarsMap.set(this.getScopedVarRef(threadId, chunkRef), childVars.slice(start, end));
+				chunks.push({
+					name: varType.startsWith('HASH') ? `[keys ${start}..${end - 1}]` : `[${start}..${end - 1}]`,
+					value: `${varType} CHUNK`,
+					type: varType.startsWith('HASH') ? 'HASH' : 'ARRAY',
+					variablesReference: chunkRef,
+					presentationHint: { kind: 'data' }
+				});
+			}
+			finalChildren = chunks;
+		}
+
+		this.childVarsMap.set(this.getScopedVarRef(threadId, ref), finalChildren);
 		const parsedLines = i < lines.length ? i + 1 : i;
 		return { parsedLines: parsedLines, varType: varType, numChildVars: childVars.length };
 	}
 
 	protected async setVariableRequest(response: DebugProtocol.SetVariableResponse, args: DebugProtocol.SetVariableArguments): Promise<void> {
 		const threadId = this.variableThreadMap.get(args.variablesReference) || this.currentStoppedThreadId;
-		const expressionToChange = this.getExpression(args.variablesReference, args.name, threadId);
+		const scopedRef = this.getScopedVarRef(threadId, args.variablesReference);
+		let loadedChildren = this.childVarsMap.get(scopedRef) || [];
+		let loadedChild = loadedChildren.find((entry) => entry.name === args.name) as DebugProtocol.Variable | undefined;
+		if (!loadedChild) {
+			const refreshedChildren = await this.loadContainerChildren(args.variablesReference, threadId);
+			if (refreshedChildren) {
+				loadedChildren = refreshedChildren;
+				loadedChild = loadedChildren.find((entry) => entry.name === args.name) as DebugProtocol.Variable | undefined;
+			}
+		}
+		const expressionToChange = loadedChild?.evaluateName || this.getExpression(args.variablesReference, args.name, threadId);
 		const lines = (await this.request(`${expressionToChange} = ${args.value}`, threadId)).filter(e => { return e !== ''; });
-		if (lines.slice(1, -1).length > 0) {
+		if (this.hasDebuggerCommandError(lines)) {
 			this.logSendEvent(new OutputEvent(`Error setting value: ${lines.join(' ')}`, 'important'));
 			response.success = false;
 		} else {
-			const value = (await this.request(`print STDERR Data::Dumper->new([${(expressionToChange.startsWith('@') ? `[${expressionToChange}]` : (expressionToChange.startsWith('%') ? `{${expressionToChange}}` : expressionToChange))}], [])->Useqq(1)->Terse(1)->Dump()`, threadId)).slice(1, -1).join(' ');
-			response.body = { value: `${value.trim()}` };
+			const value = this.extractCommandPayload(await this.request(this.buildOutputPrintCommand(`Data::Dumper->new([${(expressionToChange.startsWith('@') ? `[${expressionToChange}]` : (expressionToChange.startsWith('%') ? `{${expressionToChange}}` : expressionToChange))}], [])->Useqq(1)->Terse(1)->Dump()`), threadId)).join(' ');
+			const trimmedValue = value.trim();
+			if (loadedChild) {
+				loadedChild.value = trimmedValue;
+			}
+			response.body = { value: `${trimmedValue}` };
 		}
 		this.logSendResponse(response);
 	}
@@ -1502,7 +1835,7 @@ export class PerlDebugSession extends LoggingDebugSession {
 		const runtimes = Array.from(this.runtimes.values());
 		for (let i = 0; i < runtimes.length; i++) {
 			const runtime = runtimes[i];
-			const lines = await this.request('foreach my $INCKEY (keys %INC) { print STDERR "$INCKEY||$INC{$INCKEY}\\n" }', runtime.threadId);
+			const lines = await this.request(`foreach my $INCKEY (keys %INC) { ${this.buildOutputPrintCommand('"$INCKEY||$INC{$INCKEY}\\n"')} }`, runtime.threadId);
 			// remove first and last line
 			lines.filter(e => { return e !== ''; }).slice(1, -1).forEach(line => {
 				const tmp = line.split('||');

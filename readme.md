@@ -45,6 +45,31 @@ Legacy/fallback: `stdio` transport
 }
 ```
 
+#### Variable expansion and chunking
+
+Variables are loaded lazily in the debug view. Nested array/hash levels are not fetched until you expand them.
+
+Large collections are split into chunk nodes in the Variables view:
+
+* Arrays use `maxArrayElements` as chunk size (`[0..99]`, `[100..199]`, ...)
+* Hashes use `maxHashElements` as chunk size (`[keys 0..99]`, `[keys 100..199]`, ...)
+
+This keeps initial variable rendering responsive while still allowing deep inspection on demand.
+
+Example configuration:
+
+```json
+{
+  "type": "perl",
+  "request": "launch",
+  "name": "Perl Debug",
+  "program": "${workspaceFolder}/${relativeFile}",
+  "transport": "socket",
+  "maxArrayElements": 100,
+  "maxHashElements": 100
+}
+```
+
 ### Other Editors and IDEs
 
 

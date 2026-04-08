@@ -6,6 +6,8 @@
 * Improve startup breakpoint handling for breakpoints selected before launch
 * Improve multi-file prelaunch breakpoint behavior by deferring non-main-script breakpoints until source load
 * Improve Windows path error handling when changing file context in perl5db
+* Add lazy loading for nested variables in the debug view (expand-on-demand)
+* Add chunked display for large arrays/hashes using maxArrayElements and maxHashElements as chunk size
 * Add regression tests for prelaunch breakpoints, stop-on-entry ordering, transport behavior, and perl5db path-error handling
 
 ## 1.0.0
