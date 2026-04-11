@@ -1496,6 +1496,20 @@ describe('PerlDebugSession thread-aware routing', () => {
 		expect(threadEvents.some((event) => event.body.reason === 'exited' && event.body.threadId === 2)).toBe(true);
 	});
 
+	test('terminateRequest uses process-tree termination helper', () => {
+		session.cleanupDebuggerTransport = jest.fn();
+		session.terminateSessionProcessTree = jest.fn();
+		session.logSendEvent = jest.fn();
+		session.logSendResponse = jest.fn();
+		const response: any = { seq: 90, type: 'response', request_seq: 90, command: 'terminate', success: true };
+
+		session.terminateRequest(response, {} as any);
+
+		expect(session.cleanupDebuggerTransport).toHaveBeenCalledTimes(1);
+		expect(session.terminateSessionProcessTree).toHaveBeenCalledTimes(1);
+		expect(session.logSendResponse).toHaveBeenCalledWith(response);
+	});
+
 	test('late child attach synchronizes latest desired breakpoints and function breakpoints', async () => {
 		session.desiredBreakpointsMap.set('C:\\repo\\test.pl', [{ id: 10, line: 25, condition: '$x > 1' }]);
 		session.funcBps = [{ name: 'My::func', condition: '1' }];

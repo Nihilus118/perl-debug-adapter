@@ -8,6 +8,12 @@
 * Improve Windows path error handling when changing file context in perl5db
 * Add lazy loading for nested variables in the debug view (expand-on-demand)
 * Add chunked display for large arrays/hashes using maxArrayElements and maxHashElements as chunk size
+* Keep large array/hash chunk references stable and expandable for very large collections
+* Improve hash chunk ordering by using numeric-aware key sorting when keys are numeric
+* Improve setVariable reliability for nested and chunked variables by reusing/reloading evaluateName expressions
+* Fix stale variable values after setVariable by refreshing cached container state
+* Add a safety cap to variable dump retries to prevent unbounded continue loops on malformed debugger output
+* Improve shutdown reliability by terminating detached perl process trees to avoid dangling runtimes after repeated sessions
 * Add regression tests for prelaunch breakpoints, stop-on-entry ordering, transport behavior, and perl5db path-error handling
 
 ## 1.0.0

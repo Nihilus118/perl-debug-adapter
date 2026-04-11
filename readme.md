@@ -17,6 +17,8 @@ Forked Perl debugging requires the `socket` transport. The adapter now defaults 
 
 When explicitly using `stdio`, forked Perl debugging is still unsupported by `perl5db` (it requires a separate TTY for child debuggers). In that mode, if `perl5db` reports that it cannot create a new TTY, the session is terminated to avoid corrupted debugger state.
 
+On terminate/restart/error paths, the adapter also tears down detached Perl process trees to avoid leaving dangling interpreter sessions behind.
+
 #### launch.json examples
 
 Recommended (default): `socket` transport
@@ -53,6 +55,12 @@ Large collections are split into chunk nodes in the Variables view:
 
 * Arrays use `maxArrayElements` as chunk size (`[0..99]`, `[100..199]`, ...)
 * Hashes use `maxHashElements` as chunk size (`[keys 0..99]`, `[keys 100..199]`, ...)
+
+Chunk nodes remain expandable for very large collections.
+
+For hash chunks, numeric keys are ordered numerically (`1, 2, 10`) while non-numeric keys are ordered lexicographically.
+
+Setting variable values is supported for nested/chunked entries as well; repeated edits in the same expanded chunk now reuse/reload the correct expression context.
 
 This keeps initial variable rendering responsive while still allowing deep inspection on demand.
 

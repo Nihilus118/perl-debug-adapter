@@ -414,12 +414,52 @@ export class PerlDebugSession extends LoggingDebugSession {
 			'important'
 		));
 
-		if (this._session && !this._session.killed) {
-			this._session.kill();
-		}
+		this.terminateSessionProcessTree();
 
 		this.logSendEvent(new TerminatedEvent());
 	}
+
+	private terminateSessionProcessTree(): void {
+		if (!this._session) {
+			return;
+		}
+
+		const pid = this._session.pid;
+		if (!this._session.killed) {
+			try {
+				this._session.kill();
+			} catch {
+				// no-op
+			}
+		}
+
+		if (typeof pid !== 'number') {
+			return;
+		}
+
+		if (process.platform === 'win32') {
+			// Detached perl sessions can leave child processes alive on Windows.
+			// taskkill /T terminates the entire process tree.
+			const killer = spawn('taskkill', ['/PID', `${pid}`, '/T', '/F'], {
+				detached: true,
+				stdio: 'ignore'
+			});
+			killer.unref();
+			return;
+		}
+
+		try {
+			// For detached processes on POSIX the child runs in its own process group.
+			process.kill(-pid, 'SIGKILL');
+		} catch {
+			try {
+				process.kill(pid, 'SIGKILL');
+			} catch {
+				// no-op
+			}
+		}
+	}
+
 	private cleanupDebuggerTransport(): void {
 		this.activeTransport = 'stdio';
 		this.frameThreadMap.clear();
@@ -1038,7 +1078,7 @@ export class PerlDebugSession extends LoggingDebugSession {
 
 		// was the last session already killed?
 		if (this._session && !this._session.killed) {
-			this._session.kill();
+			this.terminateSessionProcessTree();
 		}
 
 		// launch the debugger
@@ -1106,7 +1146,7 @@ export class PerlDebugSession extends LoggingDebugSession {
 				this.logSendEvent(new OutputEvent(`Could not establish the perl5db socket transport: ${message}\n`, 'important'));
 				this.cleanupDebuggerTransport();
 				if (this._session && !this._session.killed) {
-					this._session.kill();
+					this.terminateSessionProcessTree();
 				}
 				response.success = false;
 				sendLaunchResponseOnce();
@@ -2075,9 +2115,7 @@ export class PerlDebugSession extends LoggingDebugSession {
 
 	protected terminateRequest(response: DebugProtocol.TerminateResponse, _args: DebugProtocol.TerminateArguments, _request?: DebugProtocol.Request): void {
 		this.cleanupDebuggerTransport();
-		if (this._session) {
-			this._session.kill();
-		}
+		this.terminateSessionProcessTree();
 		this.logSendEvent(new TerminatedEvent(false));
 		this.logSendResponse(response);
 	}
