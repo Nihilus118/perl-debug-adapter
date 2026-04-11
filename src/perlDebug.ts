@@ -761,6 +761,9 @@ export class PerlDebugSession extends LoggingDebugSession {
 		const keysSource = parentExpression.startsWith('%')
 			? `keys ${parentExpression}`
 			: `do { my $__h = ${this.normalizeExpressionForContainer(parentExpression)}; keys %{$__h} }`;
+		if (!this.sortKeys) {
+			return `do { my @k = ${keysSource}; @k[${start}..${end}] }`;
+		}
 		return `do { my @k = ${keysSource}; my $all_numeric = 1; for my $k (@k) { if ($k !~ /^-?\\d+$/) { $all_numeric = 0; last; } } @k = $all_numeric ? sort { $a <=> $b } @k : sort { $a cmp $b } @k; @k[${start}..${end}] }`;
 	}
 

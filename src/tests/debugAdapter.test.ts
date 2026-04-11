@@ -1404,6 +1404,7 @@ describe('PerlDebugSession thread-aware routing', () => {
 	});
 
 	test('loadChunkChildren requests numeric-aware ordering for hash chunk keys', async () => {
+		session.sortKeys = true;
 		session.chunkMetaMap.set(100903, {
 			parentExpression: '%large_hash',
 			type: 'HASH',
@@ -1434,6 +1435,32 @@ describe('PerlDebugSession thread-aware routing', () => {
 			"$large_hash{'10'}",
 			"$large_hash{'11'}"
 		]);
+	});
+
+	test('loadChunkChildren does not sort hash keys when sortKeys is disabled', async () => {
+		session.sortKeys = false;
+		session.chunkMetaMap.set(100904, {
+			parentExpression: '%large_hash',
+			type: 'HASH',
+			start: 0,
+			end: 4
+		});
+		session.request = jest.fn().mockResolvedValue([
+			'cmd',
+			'10\t2\t1\t11\t0',
+			'DB<1>'
+		]);
+		session.parseVars = jest.fn().mockImplementation(async ([expression]: string[]) => [{
+			name: expression,
+			value: expression,
+			variablesReference: 0,
+			evaluateName: expression
+		}]);
+
+		const vars = await session.loadContainerChildren(904, 1);
+
+		expect((session.request as jest.Mock).mock.calls[0][0]).not.toContain('sort {');
+		expect(vars.map((entry: any) => entry.name)).toEqual(['10', '2', '1', '11', '0']);
 	});
 
 	test('clearThreadScopedState removes per-thread frames variables and runtime overlays', () => {
