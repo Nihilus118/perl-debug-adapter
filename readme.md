@@ -13,6 +13,71 @@ It should work out of the box on Linux, Windows and Mac using VS Code. It also w
 * The PadWalker module needs to be available in your environment.
 * **OPTIONAL** I recommend using this extension together with BSCANs [Perl Navigator](https://marketplace.visualstudio.com/items?itemName=bscan.perlnavigator) as it provides great language server features out of the box.
 
+Forked Perl debugging requires the `socket` transport. The adapter now defaults to `socket` so `perl5db` can attach child debugger runtimes over TCP loopback.
+
+When explicitly using `stdio`, forked Perl debugging is still unsupported by `perl5db` (it requires a separate TTY for child debuggers). In that mode, if `perl5db` reports that it cannot create a new TTY, the session is terminated to avoid corrupted debugger state.
+
+On terminate/restart/error paths, the adapter also tears down detached Perl process trees to avoid leaving dangling interpreter sessions behind.
+
+#### launch.json examples
+
+Recommended (default): `socket` transport
+
+```json
+{
+  "type": "perl",
+  "request": "launch",
+  "name": "Perl Debug",
+  "program": "${workspaceFolder}/${relativeFile}",
+  "stopOnEntry": true,
+  "transport": "socket"
+}
+```
+
+Legacy/fallback: `stdio` transport
+
+```json
+{
+  "type": "perl",
+  "request": "launch",
+  "name": "Perl Debug (stdio)",
+  "program": "${workspaceFolder}/${relativeFile}",
+  "stopOnEntry": true,
+  "transport": "stdio"
+}
+```
+
+#### Variable expansion and chunking
+
+Variables are loaded lazily in the debug view. Nested array/hash levels are not fetched until you expand them.
+
+Large collections are split into chunk nodes in the Variables view:
+
+* Arrays use `maxArrayElements` as chunk size (`[0..99]`, `[100..199]`, ...)
+* Hashes use `maxHashElements` as chunk size (`[keys 0..99]`, `[keys 100..199]`, ...)
+
+Chunk nodes remain expandable for very large collections.
+
+For hash chunks, numeric keys are ordered numerically (`1, 2, 10`) while non-numeric keys are ordered lexicographically.
+
+Setting variable values is supported for nested/chunked entries as well; repeated edits in the same expanded chunk now reuse/reload the correct expression context.
+
+This keeps initial variable rendering responsive while still allowing deep inspection on demand.
+
+Example configuration:
+
+```json
+{
+  "type": "perl",
+  "request": "launch",
+  "name": "Perl Debug",
+  "program": "${workspaceFolder}/${relativeFile}",
+  "transport": "socket",
+  "maxArrayElements": 100,
+  "maxHashElements": 100
+}
+```
+
 ### Other Editors and IDEs
 
 

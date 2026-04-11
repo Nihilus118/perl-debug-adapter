@@ -42,12 +42,37 @@
 				"${workspaceFolder}/out/**/*.js"
 			],
 			"preLaunchTask": "npm: compile"
+		},
+		{
+			"type": "perl",
+			"request": "launch",
+			"name": "Perl Debug",
+			"program": "${workspaceFolder}/${relativeFile}",
+			"perlExecutable": "C:\\berrybrew\\instance\\5.38.0_64\\perl\\bin\\perl.exe",
+			"args": [
+				"arg1", // $ARGV[0]
+				"arg2" // $ARGV[1]
+			],
+		},
+		{
+			"type": "perl",
+			"request": "launch",
+			"name": "Perl Debug Fork Socket Manual",
+			"program": "${workspaceFolder}/src/tests/data/fork_socket_manual.pl",
+			"cwd": "${workspaceFolder}/src/tests/data",
+			"stopOnEntry": true,
+			"transport": "socket",
+			"trace": true,
+			"perlExecutable": "C:\\berrybrew\\instance\\5.38.0_64\\perl\\bin\\perl.exe"
 		}
 	],
 	"compounds": [
 		{
 			"name": "Extension + Server",
-			"configurations": [ "Extension", "Server" ]
+			"configurations": [
+				"Extension",
+				"Server"
+			]
 		}
 	]
 }
