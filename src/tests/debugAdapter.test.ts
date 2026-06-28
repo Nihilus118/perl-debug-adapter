@@ -1101,6 +1101,43 @@ describe('PerlDebugSession thread-aware routing', () => {
 		expect(events.some((event) => event.event === 'stopped')).toBe(false);
 	});
 
+	test('auto-continues package style stop lines outside workspace during continue', async () => {
+		session.cwd = 'C:\\repo\\workspace';
+		session.request = jest.fn().mockResolvedValue([
+			'c',
+			'LWP::UserAgent::add_handler(C:/Strawberry/perl/vendor/lib/HTTP/Config.pm:6):',
+			'6: our $VERSION = \'7.01\';',
+			'DB<11>'
+		]);
+		session.continue = jest.fn().mockResolvedValue(undefined);
+
+		await session.execute('c', 1);
+
+		expect(session.continue).toHaveBeenCalledWith(1);
+		const events = (session.sendEvent as jest.Mock).mock.calls.map((call) => call[0]);
+		expect(events.some((event) => event.event === 'stopped')).toBe(false);
+	});
+
+	test('stops on explicit line breakpoint outside workspace during continue', async () => {
+		session.cwd = 'C:\\repo\\workspace';
+		session.request = jest.fn().mockResolvedValue([
+			'c',
+			'LWP::UserAgent::add_handler(C:/Strawberry/perl/vendor/lib/HTTP/Config.pm:6):',
+			'6: our $VERSION = \'7.01\';',
+			'DB<11>'
+		]);
+		session.runtimeBreakpointsMap.set(1, new Map([
+			['C:\\Strawberry\\perl\\vendor\\lib\\HTTP\\Config.pm', [{ id: 1, line: 6, condition: '' }]]
+		]));
+		session.continue = jest.fn().mockResolvedValue(undefined);
+
+		await session.execute('c', 1);
+
+		expect(session.continue).not.toHaveBeenCalled();
+		const events = (session.sendEvent as jest.Mock).mock.calls.map((call) => call[0]);
+		expect(events.some((event) => event.event === 'stopped' && event.body.reason === 'breakpoint')).toBe(true);
+	});
+
 	test('synchronizes function breakpoints across all active runtimes', async () => {
 		session.streamCatcher.input = {};
 		session.runtimes.set(1, { threadId: 1, name: 'thread 1', streamCatcher: {}, isPrimary: true });

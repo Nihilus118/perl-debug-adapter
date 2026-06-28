@@ -1,3 +1,9 @@
+## 2.0.1
+* Fix repeated debugger pauses when perl5db reports `continue loaded source ...` while stepping/continuing through external modules
+* Parse perl5db package-style stop locations such as `Package::sub(path:line):` in execution flow handling
+* Keep user-defined external line breakpoints working by only auto-continuing non-workspace stops when no explicit breakpoint matches
+* Add regression tests for package-style external-module stops and explicit external breakpoints
+
 ## 2.0.0
 * Add socket transport support for perl5db and child fork runtimes
 * Make socket transport the default debugger transport
