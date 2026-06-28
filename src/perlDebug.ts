@@ -1990,37 +1990,64 @@ export class PerlDebugSession extends LoggingDebugSession {
 				reason = 'new source';
 			}
 		} else {
-			const stoppedLocation = lines.find((line) => line.match(/^main::\((.*):(\d+)\):/));
-			const matchedLocation = stoppedLocation?.match(/^main::\((.*):(\d+)\):/);
+			const parseStoppedLocation = (line: string): { path: string; line: number } | undefined => {
+				const mainMatch = line.match(/^main::\((.*):(\d+)\):/);
+				if (mainMatch) {
+					return { path: mainMatch[1], line: +mainMatch[2] };
+				}
+
+				const packageMatch = line.match(/^[^\s].*\((.*):(\d+)\):$/);
+				if (packageMatch) {
+					return { path: packageMatch[1], line: +packageMatch[2] };
+				}
+
+				return undefined;
+			};
+
+			const matchedLocation = lines
+				.map((line) => parseStoppedLocation(line))
+				.find((match) => !!match);
+
 			if (matchedLocation) {
-				let stoppedPath = matchedLocation[1];
+				let stoppedPath = matchedLocation.path;
 				const isRelativeStoppedPath = stoppedPath.match(/^\./) !== null;
 				if (isRelativeStoppedPath) {
 					stoppedPath = join(this.cwd, stoppedPath);
 				}
+				const stoppedLine = matchedLocation.line;
 
 				const normalizedStoppedPath = this.normalizePathKey(stoppedPath);
 				const normalizedCwd = this.normalizePathKey(this.cwd);
 				const inWorkspace = normalizedStoppedPath.startsWith(normalizedCwd);
+				const runtimeBps = this.getPathMappedBreakpoints(this.getRuntimeBreakpoints(threadId), normalizedStoppedPath) || [];
+				const isRealLineBreakpoint = runtimeBps.some((bp) => bp.line === stoppedLine);
 
 				if (!inWorkspace) {
-					if (cmd === 'n') {
-						await this.next(threadId);
-					} else if (cmd === 'c') {
-						await this.continue(threadId);
+					if (!isRealLineBreakpoint) {
+						if (cmd === 'n') {
+							await this.next(threadId);
+						} else if (cmd === 'c') {
+							await this.continue(threadId);
+						}
+						return;
 					}
-					return;
 				}
 
 				if (cmd === 'c' && this.funcBps.length === 0 && isRelativeStoppedPath) {
-					const stoppedLine = +matchedLocation[2];
-					const runtimeBps = this.getPathMappedBreakpoints(this.getRuntimeBreakpoints(threadId), normalizedStoppedPath) || [];
-					const isRealLineBreakpoint = runtimeBps.some((bp) => bp.line === stoppedLine);
 					if (!isRealLineBreakpoint) {
 						await this.continue(threadId);
 						return;
 					}
 				}
+			} else if (cmd === 'c' || cmd === 'n') {
+				// Some perl5db stops report package::sub(path:line): instead of main::(...).
+				// If we cannot map a location, keep executing for continue/next requests.
+				if (cmd === 'n') {
+					await this.next(threadId);
+				} else {
+					await this.continue(threadId);
+				}
+				return;
 			}
 
 			if (cmd === 'c') {
